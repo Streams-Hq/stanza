@@ -58,13 +58,18 @@ stellar contract invoke --id $CONTRACT --network testnet -- plan_count
 
 ## 2. Web app on Vercel
 
-The app is a standard Next.js 14 monorepo package. [`vercel.json`](https://github.com/Streams-Hq/stanza/blob/main/vercel.json)
-already sets the build command and output directory.
+The app is a Next.js 14 package inside a pnpm workspace, so Vercel must treat
+`apps/web` as the project while installing from the workspace root.
+[`apps/web/vercel.json`](https://github.com/Streams-Hq/stanza/blob/main/apps/web/vercel.json)
+supplies the commands; the Root Directory itself is a dashboard setting.
 
 1. Push the repo, then **Add New → Project** in Vercel and import it.
-2. **Root Directory:** leave it at the repository root. The root `vercel.json`
-   builds the SDK first and then the web app.
-3. **Framework preset:** Next.js (detected).
+2. **Root Directory:** `apps/web`. Leaving it at the repository root fails with
+   `NEXT_NO_VERSION`, because the root `package.json` is the workspace manifest
+   and does not list `next`.
+3. **Include files outside the Root Directory in the Build Step:** enable it so
+   the workspace lockfile and `packages/sdk` are present.
+4. **Framework preset:** Next.js (detected from `apps/web/package.json`).
 4. Add the environment variables below for **Production** and **Preview**:
 
    | Variable | Value |

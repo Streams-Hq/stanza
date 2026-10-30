@@ -150,9 +150,10 @@ committed testnet one, run `pnpm deploy:testnet` and update both env files.
 - **Contract:** `pnpm contract:build && pnpm deploy:testnet`, or
   `stellar contract deploy`. Details in
   [Deployment](https://streams-hq.github.io/stanza/developers/deployment/).
-- **Web app:** Vercel, with the repo root as the root directory; `vercel.json`
-  builds the SDK and then the app. Set the `NEXT_PUBLIC_*` variables **before**
-  building. The app also runs anywhere Node 20 runs.
+- **Web app:** Vercel, with **Root Directory `apps/web`** and "Include files
+  outside the Root Directory" enabled; `apps/web/vercel.json` installs from the
+  workspace root and builds the SDK before the app. Set the `NEXT_PUBLIC_*`
+  variables **before** building. The app also runs anywhere Node 20 runs.
 - **Indexer:** any host that keeps a process alive with a persistent disk
   (Render, Fly.io, Railway). It is a cache; the app falls back to Soroban RPC
   simulations when it is unavailable.
