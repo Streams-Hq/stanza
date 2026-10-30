@@ -33,8 +33,17 @@ jobs:
       - name: Contract unit tests
         run: cargo test --manifest-path contracts/stanza/Cargo.toml
 
+      # soroban-sdk 29 refuses a plain `cargo build` for wasm: the spec must be
+      # shaken by stellar-cli, so the deployable artifact can only come from it.
+      - name: Install Stellar CLI
+        run: |
+          curl -sSL \
+            https://github.com/stellar/stellar-cli/releases/download/v25.2.0/stellar-cli-25.2.0-x86_64-unknown-linux-gnu.tar.gz \
+            | sudo tar -xz -C /usr/local/bin stellar
+          stellar --version
+
       - name: Build wasm
-        run: cargo build --manifest-path contracts/stanza/Cargo.toml --target wasm32v1-none --release
+        run: stellar contract build --manifest-path contracts/stanza/Cargo.toml
 
   app:
     name: SDK, indexer and web app

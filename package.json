@@ -10,7 +10,7 @@
     "test": "turbo run test",
     "lint": "turbo run lint",
     "clean": "turbo run clean && rm -rf node_modules",
-    "contract:build": "cd contracts/stanza && cargo build --target wasm32v1-none --release",
+    "contract:build": "stellar contract build --manifest-path contracts/stanza/Cargo.toml",
     "contract:test": "cd contracts/stanza && cargo test",
     "contract:fmt": "cd contracts/stanza && cargo fmt --check",
     "deploy:testnet": "node scripts/deploy-testnet.mjs",
