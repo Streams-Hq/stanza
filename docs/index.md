@@ -47,7 +47,7 @@ queue, and no custodian.
 | SDK | [`@stanza/sdk`](developers/sdk.md) (TypeScript, bigint-only) |
 | Indexer | Node.js + Express + SQLite read model |
 | Wallet | [Freighter](https://www.freighter.app) |
-| Audit status | **Unaudited, testnet only** — see the [security policy](https://github.com/stanza-labs/stanza/blob/main/SECURITY.md) |
+| Audit status | **Unaudited, testnet only** — see the [security policy](https://github.com/Streams-Hq/stanza/blob/main/SECURITY.md) |
 
 !!! warning "Testnet software"
     Stanza is unaudited and runs on Stellar testnet. Do not use it to bill real

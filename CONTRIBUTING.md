@@ -18,7 +18,7 @@ personal attacks are not tolerated in issues, PRs, or discussions.
 
 ## Pick an issue
 
-1. Browse [issues](https://github.com/stanza-labs/stanza/issues) and filter by
+1. Browse [issues](https://github.com/Streams-Hq/stanza/issues) and filter by
    `good first issue` or `Stellar Wave`.
 2. Comment on the issue to claim it. Wait for a maintainer to assign it before
    starting large work.
@@ -28,7 +28,7 @@ personal attacks are not tolerated in issues, PRs, or discussions.
 ## Set up
 
 ```bash
-git clone https://github.com/stanza-labs/stanza.git
+git clone https://github.com/Streams-Hq/stanza.git
 cd stanza
 pnpm install
 

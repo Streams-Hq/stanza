@@ -58,7 +58,7 @@ stellar contract invoke --id $CONTRACT --network testnet -- plan_count
 
 ## 2. Web app on Vercel
 
-The app is a standard Next.js 14 monorepo package. [`vercel.json`](https://github.com/stanza-labs/stanza/blob/main/vercel.json)
+The app is a standard Next.js 14 monorepo package. [`vercel.json`](https://github.com/Streams-Hq/stanza/blob/main/vercel.json)
 already sets the build command and output directory.
 
 1. Push the repo, then **Add New → Project** in Vercel and import it.

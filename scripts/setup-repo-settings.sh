@@ -2,10 +2,10 @@
 # Applies the Stanza repository settings: labels, branch protection, merge
 # policy, discussions. Requires an admin token.
 #
-#   REPO=stanza-labs/stanza ./scripts/setup-repo-settings.sh
+#   REPO=Streams-Hq/stanza ./scripts/setup-repo-settings.sh
 set -euo pipefail
 
-REPO="${REPO:-stanza-labs/stanza}"
+REPO="${REPO:-Streams-Hq/stanza}"
 
 command -v gh >/dev/null 2>&1 || {
   echo "GitHub CLI (gh) is required: https://cli.github.com" >&2

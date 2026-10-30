@@ -47,7 +47,7 @@ const paging = (req: Request): { limit: number; offset: number } => ({
 app.get('/', (_req, res) => {
   res.json({
     service: 'stanza-indexer',
-    docs: 'https://github.com/stanza-labs/stanza#readme',
+    docs: 'https://github.com/Streams-Hq/stanza#readme',
     endpoints: [
       '/health',
       '/api/stats',

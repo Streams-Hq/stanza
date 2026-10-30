@@ -6,7 +6,7 @@ comfortable level.
 
 The full guide lives in the repository:
 
-**→ [CONTRIBUTING.md](https://github.com/stanza-labs/stanza/blob/main/CONTRIBUTING.md)**
+**→ [CONTRIBUTING.md](https://github.com/Streams-Hq/stanza/blob/main/CONTRIBUTING.md)**
 
 ## The short version
 
@@ -42,5 +42,5 @@ much work each one is.
 ## Security
 
 Do not open a public issue for a security problem. Follow the
-[security policy](https://github.com/stanza-labs/stanza/blob/main/SECURITY.md)
+[security policy](https://github.com/Streams-Hq/stanza/blob/main/SECURITY.md)
 and report privately.

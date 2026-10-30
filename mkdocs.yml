@@ -2,9 +2,9 @@ site_name: Stanza
 site_description: >-
   Non-custodial recurring subscriptions on Stellar — Soroban contract, SDK,
   indexer, and app documentation.
-site_url: https://stanza-labs.github.io/stanza/
-repo_url: https://github.com/stanza-labs/stanza
-repo_name: stanza-labs/stanza
+site_url: https://streams-hq.github.io/stanza/
+repo_url: https://github.com/Streams-Hq/stanza
+repo_name: Streams-Hq/stanza
 edit_uri: edit/main/docs/
 copyright: Copyright &copy; 2026 Stanza contributors — MIT licensed
 
@@ -79,6 +79,6 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/stanza-labs/stanza
+      link: https://github.com/Streams-Hq/stanza
     - icon: fontawesome/solid/globe
       link: https://stellar.org

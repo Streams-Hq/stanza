@@ -9,16 +9,16 @@ allowance. Every cycle, anyone can settle the charge — and the contract pulls
 exactly one cycle's price, straight from the subscriber's wallet to the
 merchant's.
 
-[![CI](https://github.com/stanza-labs/stanza/actions/workflows/ci.yml/badge.svg)](https://github.com/stanza-labs/stanza/actions/workflows/ci.yml)
-[![Docs](https://github.com/stanza-labs/stanza/actions/workflows/docs.yml/badge.svg)](https://stanza-labs.github.io/stanza/)
+[![CI](https://github.com/Streams-Hq/stanza/actions/workflows/ci.yml/badge.svg)](https://github.com/Streams-Hq/stanza/actions/workflows/ci.yml)
+[![Docs](https://github.com/Streams-Hq/stanza/actions/workflows/docs.yml/badge.svg)](https://streams-hq.github.io/stanza/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Stellar](https://img.shields.io/badge/Stellar-testnet-7B3FE4.svg)](https://stellar.org)
 [![Soroban](https://img.shields.io/badge/Soroban-soroban--sdk%2029-00E5FF.svg)](https://soroban.stellar.org)
 [![Next.js](https://img.shields.io/badge/Next.js-14-black.svg)](https://nextjs.org/)
 
-**[Documentation](https://stanza-labs.github.io/stanza/)** ·
+**[Documentation](https://streams-hq.github.io/stanza/)** ·
 **[Contract on Stellar.Expert](https://stellar.expert/explorer/testnet/contract/CDGIYCP56ZAC5ZVTJVHJQ5H7OLZSCDU3DFA77VWXT74N47MW6ZBV4FDP)** ·
-**[Drips Wave backlog](https://github.com/stanza-labs/stanza/issues)**
+**[Drips Wave backlog](https://github.com/Streams-Hq/stanza/issues)**
 
 </div>
 
@@ -71,7 +71,7 @@ merchant:   set_plan_active(false)                  ← retire the plan
 Each successful `charge` moves exactly one `amount`, advances `next_charge_at`
 by exactly one `period`, increments `cycles_charged`, and marks the subscription
 `completed` when the plan's cycle cap is reached. See
-[How billing works](https://stanza-labs.github.io/stanza/protocol/).
+[How billing works](https://streams-hq.github.io/stanza/protocol/).
 
 ## Architecture
 
@@ -116,7 +116,7 @@ Prerequisites: Node 20+, pnpm 10, Rust stable, the `wasm32v1-none` target, and
 Stellar CLI 25.2.0+ (required by `soroban-sdk` 29 to build wasm).
 
 ```bash
-git clone https://github.com/stanza-labs/stanza.git
+git clone https://github.com/Streams-Hq/stanza.git
 cd stanza
 pnpm install
 
@@ -149,7 +149,7 @@ committed testnet one, run `pnpm deploy:testnet` and update both env files.
 
 - **Contract:** `pnpm contract:build && pnpm deploy:testnet`, or
   `stellar contract deploy`. Details in
-  [Deployment](https://stanza-labs.github.io/stanza/developers/deployment/).
+  [Deployment](https://streams-hq.github.io/stanza/developers/deployment/).
 - **Web app:** Vercel, with the repo root as the root directory; `vercel.json`
   builds the SDK and then the app. Set the `NEXT_PUBLIC_*` variables **before**
   building. The app also runs anywhere Node 20 runs.
@@ -168,7 +168,7 @@ committed testnet one, run `pnpm deploy:testnet` and update both env files.
 | `NEXT_PUBLIC_DEFAULT_TOKEN_ADDRESS` | Default asset (XLM SAC) | `CDLZFC3S…GCYSC` |
 | `STANZA_CONTRACT_ID` | Contract the indexer follows | testnet deployment above |
 
-Full tables: [Environment variables](https://stanza-labs.github.io/stanza/developers/environment/).
+Full tables: [Environment variables](https://streams-hq.github.io/stanza/developers/environment/).
 
 ## Contributing
 

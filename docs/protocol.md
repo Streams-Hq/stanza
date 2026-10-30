@@ -2,7 +2,7 @@
 
 This page describes the state machine, the arithmetic, and the invariants of the
 Stanza contract. The Rust source is the authoritative specification:
-[`contracts/stanza/src/lib.rs`](https://github.com/stanza-labs/stanza/blob/main/contracts/stanza/src/lib.rs).
+[`contracts/stanza/src/lib.rs`](https://github.com/Streams-Hq/stanza/blob/main/contracts/stanza/src/lib.rs).
 
 ## The plan object
 

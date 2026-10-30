@@ -32,7 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   Contract
                 </a>
                 <a
-                  href="https://github.com/stanza-labs/stanza"
+                  href="https://github.com/Streams-Hq/stanza"
                   target="_blank"
                   rel="noreferrer"
                   className="transition-colors hover:text-stellar-cyan"

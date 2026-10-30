@@ -102,7 +102,7 @@ transaction fee payer does not have to be the subscriber or the merchant.
 
 ## Billing math
 
-These mirror [`src/lib.rs`](https://github.com/stanza-labs/stanza/blob/main/contracts/stanza/src/lib.rs)
+These mirror [`src/lib.rs`](https://github.com/Streams-Hq/stanza/blob/main/contracts/stanza/src/lib.rs)
 exactly, so a UI countdown never disagrees with `charge`.
 
 ```ts

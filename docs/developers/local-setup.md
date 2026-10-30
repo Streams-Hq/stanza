@@ -28,7 +28,7 @@ cargo install --locked stellar-cli --version 25.2.0
 ## Clone and install
 
 ```bash
-git clone https://github.com/stanza-labs/stanza.git
+git clone https://github.com/Streams-Hq/stanza.git
 cd stanza
 pnpm install
 ```

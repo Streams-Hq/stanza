@@ -7,8 +7,8 @@ import WalletButton from './WalletButton';
 const links = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/plans/new', label: 'New plan', icon: PlusCircle },
-  { href: 'https://stanza-labs.github.io/stanza/', label: 'Docs', icon: BookOpen },
-  { href: 'https://github.com/stanza-labs/stanza', label: 'GitHub', icon: Github },
+  { href: 'https://streams-hq.github.io/stanza/', label: 'Docs', icon: BookOpen },
+  { href: 'https://github.com/Streams-Hq/stanza', label: 'GitHub', icon: Github },
 ];
 
 export default function Navbar() {

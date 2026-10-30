@@ -2,12 +2,12 @@
 # Creates the Stanza contributor backlog (Drips Wave + good first issues).
 #
 #   gh auth login
-#   REPO=stanza-labs/stanza ./scripts/create-issues.sh
+#   REPO=Streams-Hq/stanza ./scripts/create-issues.sh
 #
 # Use DRY_RUN=true to print instead of creating.
 set -euo pipefail
 
-REPO="${REPO:-stanza-labs/stanza}"
+REPO="${REPO:-Streams-Hq/stanza}"
 DRY_RUN="${DRY_RUN:-false}"
 
 command -v gh >/dev/null 2>&1 || {

@@ -5,7 +5,7 @@ plans and let anyone settle a due cycle by pulling a capped SEP-41 allowance.
 It is written with `soroban-sdk` 29 for target `wasm32v1-none` and is **immutable
 once deployed**.
 
-- Source: [`contracts/stanza/src/lib.rs`](https://github.com/stanza-labs/stanza/blob/main/contracts/stanza/src/lib.rs)
+- Source: [`contracts/stanza/src/lib.rs`](https://github.com/Streams-Hq/stanza/blob/main/contracts/stanza/src/lib.rs)
 - Live testnet contract: `CDGIYCP56ZAC5ZVTJVHJQ5H7OLZSCDU3DFA77VWXT74N47MW6ZBV4FDP`
 
 ## Storage
@@ -178,7 +178,7 @@ stellar contract invoke --id $CONTRACT --network testnet -- get_subscription --s
 
 ## Invariants
 
-The unit tests in [`src/test.rs`](https://github.com/stanza-labs/stanza/blob/main/contracts/stanza/src/test.rs)
+The unit tests in [`src/test.rs`](https://github.com/Streams-Hq/stanza/blob/main/contracts/stanza/src/test.rs)
 assert the invariants listed in [How billing works](protocol.md#invariants).
 The most important one for custody: **the contract's token balance is always
 zero**, because it never receives funds.

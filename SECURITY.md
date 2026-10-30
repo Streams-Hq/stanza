@@ -51,7 +51,7 @@ Out of scope:
 Do not open a public issue.
 
 - **Preferred:** GitHub Security Advisories —
-  https://github.com/stanza-labs/stanza/security/advisories/new
+  https://github.com/Streams-Hq/stanza/security/advisories/new
 - **Or** contact the maintainers through the repository's listed maintainer
   account.
 
