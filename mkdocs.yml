@@ -1,12 +1,12 @@
-site_name: StellarStream
+site_name: Stanza
 site_description: >-
-  Continuous, linear payment streams on Stellar — application layer, SDK, and
-  indexer documentation.
-site_url: https://deyanju23.github.io/stellar-stream-app/
-repo_url: https://github.com/Deyanju23/stellar-stream-app
-repo_name: Deyanju23/stellar-stream-app
+  Non-custodial recurring subscriptions on Stellar — Soroban contract, SDK,
+  indexer, and app documentation.
+site_url: https://stanza-labs.github.io/stanza/
+repo_url: https://github.com/stanza-labs/stanza
+repo_name: stanza-labs/stanza
 edit_uri: edit/main/docs/
-copyright: Copyright &copy; 2026 Deyanju23 — MIT licensed
+copyright: Copyright &copy; 2026 Stanza contributors — MIT licensed
 
 theme:
   name: material
@@ -43,15 +43,15 @@ nav:
   - Home: index.md
   - Introduction: introduction.md
   - Protocol:
-      - How streaming works: protocol-mechanics.md
+      - How billing works: protocol.md
       - Contract reference: contract-reference.md
   - User guides:
-      - Sending a stream: guides/sender.md
-      - Receiving a stream: guides/recipient.md
+      - For merchants: guides/merchant.md
+      - For subscribers: guides/subscriber.md
   - Developer guide:
       - Local setup: developers/local-setup.md
       - Environment variables: developers/environment.md
-      - Deployment topology: developers/deployment.md
+      - Deployment: developers/deployment.md
       - SDK reference: developers/sdk.md
       - Indexer API: developers/api.md
   - Contributing: contributing.md
@@ -79,6 +79,6 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/Deyanju23/stellar-stream-app
+      link: https://github.com/stanza-labs/stanza
     - icon: fontawesome/solid/globe
       link: https://stellar.org

@@ -1,376 +1,410 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   Activity,
-  ArrowDownLeft,
-  ArrowUpRight,
-  Clock,
-  Filter,
-  Flame,
+  ArrowRight,
+  CalendarClock,
   Layers,
   Loader2,
   PlusCircle,
   RefreshCw,
-  Search,
+  Store,
+  Users,
   Wallet,
   Zap,
 } from 'lucide-react';
-import { formatUnits, Stream } from '@stellar-stream/sdk';
-import StreamCard from '@/components/StreamCard';
+import { Plan, Subscription, formatUnits } from '@stanza/sdk';
+import {
+  Stats,
+  api,
+  planFromRecord,
+  shortAddress,
+  subscriptionFromRecord,
+} from '@/lib/api';
+import { getStanzaClient } from '@/lib/stellar';
 import { useFreighter } from '@/hooks/useFreighter';
 import { CONFIG } from '@/lib/config';
+import PlanCard from '@/components/PlanCard';
+import SubscriptionCard from '@/components/SubscriptionCard';
 
-type TabType = 'outgoing' | 'incoming' | 'all';
-type StatusFilter = 'ALL' | 'ACTIVE' | 'COMPLETED' | 'CANCELED';
+type Tab = 'plans' | 'subscriptions' | 'explore' | 'keeper';
 
-interface RawStreamRecord {
-  id: number;
-  sender: string;
-  recipient: string;
-  token: string;
-  deposit_amount: string;
-  start_time: number;
-  stop_time: number;
-  rate_per_second: string;
-  remaining_balance: string;
-  recipient_withdrawn: string;
-  is_canceled: number;
-  cancelable: number;
+const TABS: { id: Tab; label: string; icon: typeof Layers }[] = [
+  { id: 'plans', label: 'My plans', icon: Store },
+  { id: 'subscriptions', label: 'My subscriptions', icon: CalendarClock },
+  { id: 'explore', label: 'Explore', icon: Layers },
+  { id: 'keeper', label: 'Keeper queue', icon: Zap },
+];
+
+async function loadPlansById(ids: bigint[]): Promise<Plan[]> {
+  const client = getStanzaClient();
+  const plans: Plan[] = [];
+  for (const id of ids) {
+    try {
+      plans.push(await client.getPlan(id));
+    } catch {
+      // Skip ids that are not readable on this network.
+    }
+  }
+  return plans;
+}
+
+async function loadSubsById(ids: bigint[]): Promise<Subscription[]> {
+  const client = getStanzaClient();
+  const subs: Subscription[] = [];
+  for (const id of ids) {
+    try {
+      subs.push(await client.getSubscription(id));
+    } catch {
+      // Skip unreadable ids.
+    }
+  }
+  return subs;
 }
 
 export default function DashboardPage() {
   const { isConnected, address, connect } = useFreighter();
 
-  const [activeTab, setActiveTab] = useState<TabType>('outgoing');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
-
-  const [allStreams, setAllStreams] = useState<Stream[]>([]);
+  const [tab, setTab] = useState<Tab>('plans');
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [subs, setSubs] = useState<Subscription[]>([]);
+  const [planLookup, setPlanLookup] = useState<Record<string, Plan>>({});
+  const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const fetchStreams = useCallback(async () => {
+  const requiresWallet = tab === 'plans' || tab === 'subscriptions' || tab === 'keeper';
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const lookup: Record<string, Plan> = {};
+
     try {
-      let url = `${CONFIG.indexerUrl}/api/streams?limit=100`;
+      const client = getStanzaClient();
 
-      if (isConnected && address) {
-        if (activeTab === 'outgoing') {
-          url = `${CONFIG.indexerUrl}/api/streams/sender/${address}`;
-        } else if (activeTab === 'incoming') {
-          url = `${CONFIG.indexerUrl}/api/streams/recipient/${address}`;
+      if (tab === 'explore') {
+        const cached = await api.plans();
+        let items = cached?.plans.map(planFromRecord) ?? [];
+        if (items.length === 0) {
+          const count = await client.planCount();
+          const ids: bigint[] = [];
+          for (let id = count - 1n; id >= 0n && ids.length < 24; id -= 1n) ids.push(id);
+          items = await loadPlansById(ids);
+        }
+        setPlans(items);
+        setSubs([]);
+        items.forEach((p) => {
+          lookup[p.id.toString()] = p;
+        });
+      } else if (tab === 'plans') {
+        if (!address) {
+          setPlans([]);
+          setSubs([]);
+          setLoading(false);
+          return;
+        }
+        const cached = await api.plansByMerchant(address);
+        let items = cached?.plans.map(planFromRecord) ?? [];
+        if (items.length === 0) {
+          items = await loadPlansById(await client.plansOf(address));
+        }
+        setPlans(items);
+        setSubs([]);
+      } else if (tab === 'subscriptions') {
+        if (!address) {
+          setPlans([]);
+          setSubs([]);
+          setLoading(false);
+          return;
+        }
+        const cached = await api.subscriptionsBySubscriber(address);
+        let items = cached?.subscriptions.map(subscriptionFromRecord) ?? [];
+        if (items.length === 0) {
+          items = await loadSubsById(await client.subsOf(address));
+        }
+        setSubs(items);
+        setPlans([]);
+        for (const sub of items) {
+          try {
+            lookup[sub.planId.toString()] = await client.getPlan(sub.planId);
+          } catch {
+            // Plan may have been created on another network.
+          }
+        }
+      } else {
+        const cached = await api.due();
+        const items = cached?.subscriptions.map(subscriptionFromRecord) ?? [];
+        setSubs(items);
+        setPlans([]);
+        for (const sub of items) {
+          try {
+            lookup[sub.planId.toString()] = await client.getPlan(sub.planId);
+          } catch {
+            // ignore
+          }
         }
       }
 
-      const res = await fetch(url);
-      if (res.ok) {
-        const json = await res.json();
-        const rawList: RawStreamRecord[] = json.streams || [];
-
-        const mapped: Stream[] = rawList.map((s) => ({
-          id: BigInt(s.id),
-          sender: s.sender,
-          recipient: s.recipient,
-          token: s.token,
-          depositAmount: BigInt(s.deposit_amount),
-          startTime: BigInt(s.start_time),
-          stopTime: BigInt(s.stop_time),
-          ratePerSecond: BigInt(s.rate_per_second),
-          remainingBalance: BigInt(s.remaining_balance),
-          recipientWithdrawn: BigInt(s.recipient_withdrawn),
-          isCanceled: Boolean(s.is_canceled),
-          cancelable: Boolean(s.cancelable),
-        }));
-
-        setAllStreams(mapped);
-      }
+      setPlanLookup(lookup);
+      setStats(await api.stats());
     } catch (err) {
-      console.warn('Could not reach indexer, running with empty cache:', err);
+      setError(err instanceof Error ? err.message : 'Could not load on-chain data');
+      setPlans([]);
+      setSubs([]);
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
-  }, [activeTab, isConnected, address]);
+  }, [tab, address]);
 
   useEffect(() => {
-    setLoading(true);
-    fetchStreams();
-  }, [fetchStreams]);
+    void load();
+  }, [load]);
 
-  // Filtered list
-  const filteredStreams = useMemo(() => {
-    const now = Math.floor(Date.now() / 1000);
-
-    return allStreams.filter((stream) => {
-      // 1. Status Filter
-      if (statusFilter === 'CANCELED' && !stream.isCanceled) return false;
-      if (statusFilter === 'ACTIVE') {
-        if (stream.isCanceled || now >= Number(stream.stopTime)) return false;
-      }
-      if (statusFilter === 'COMPLETED') {
-        if (stream.isCanceled || now < Number(stream.stopTime)) return false;
-      }
-
-      // 2. Search Query (matches ID, sender, or recipient)
-      if (searchQuery.trim()) {
-        const query = searchQuery.trim().toLowerCase();
-        const idMatch = stream.id.toString() === query;
-        const senderMatch = stream.sender.toLowerCase().includes(query);
-        const recipientMatch = stream.recipient.toLowerCase().includes(query);
-        return idMatch || senderMatch || recipientMatch;
-      }
-
-      return true;
-    });
-  }, [allStreams, statusFilter, searchQuery]);
-
-  // Aggregate Metrics
-  const metrics = useMemo(() => {
-    const now = Math.floor(Date.now() / 1000);
-    let totalDeposited = 0n;
-    let activeCount = 0;
-    let totalRemaining = 0n;
-
-    for (const s of allStreams) {
-      totalDeposited += s.depositAmount;
-      totalRemaining += s.remainingBalance;
-      if (!s.isCanceled && now >= Number(s.startTime) && now < Number(s.stopTime)) {
-        activeCount++;
-      }
-    }
-
-    return {
-      activeCount,
-      totalDeposited: formatUnits(totalDeposited, 7),
-      totalRemaining: formatUnits(totalRemaining, 7),
-      streamCount: allStreams.length,
-    };
-  }, [allStreams]);
+  const totalPlans = stats?.plans ?? plans.length;
+  const totalSubs = stats?.subscriptions ?? subs.length;
+  const volume = stats ? formatUnits(BigInt(stats.volume), CONFIG.decimals) : '—';
 
   return (
     <div className="space-y-8">
-      {/* Hero Section */}
-      <div className="glass-panel relative overflow-hidden rounded-3xl p-6 sm:p-10">
+      <section className="glass-panel relative overflow-hidden rounded-3xl p-6 sm:p-10">
         <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-cyan-500/15 blur-3xl" />
-
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div className="relative z-10 flex flex-col justify-between gap-6 md:flex-row md:items-center">
           <div className="max-w-2xl space-y-3">
-            <div className="inline-flex items-center space-x-2 rounded-xl bg-cyan-500/10 px-3 py-1 text-xs font-semibold text-stellar-cyan border border-cyan-500/30">
-              <Flame className="h-3.5 w-3.5" />
-              <span>Real-Time Continuous Token Streaming</span>
-            </div>
-            <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-white leading-tight">
-              Continuous Linear Money Streams on{' '}
-              <span className="text-gradient-cyan">Stellar Soroban</span>
+            <span className="inline-flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-xs font-semibold text-stellar-cyan">
+              <Activity className="h-3.5 w-3.5" />
+              Recurring billing, settled on Soroban
+            </span>
+            <h1 className="text-3xl font-black leading-tight tracking-tight text-white sm:text-5xl">
+              Subscriptions that never{' '}
+              <span className="text-gradient-cyan">take custody</span> of your money
             </h1>
-            <p className="text-sm text-slate-400 max-w-xl">
-              Stream payroll, subscriptions, vesting, or grant disbursements with sub-second precision, zero loss of precision, and instant withdrawal flexibility.
+            <p className="max-w-xl text-sm text-slate-400">
+              Merchants publish a plan once. Subscribers approve a capped allowance,
+              and anyone can settle a cycle when it comes due. Funds move straight
+              from the subscriber&apos;s wallet to the merchant — the contract never
+              holds a balance.
             </p>
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-3">
-            <Link
-              href="/create"
-              className="inline-flex items-center justify-center space-x-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-emerald-400 px-6 py-3.5 text-sm font-bold text-stellar-dark shadow-xl shadow-cyan-500/20 hover:opacity-95 transition-all active:scale-[0.99]"
-            >
-              <PlusCircle className="h-4 w-4" />
-              <span>Create Stream</span>
-            </Link>
-          </div>
-        </div>
-
-        {/* Hero Stat Counters */}
-        <div className="relative z-10 mt-8 grid grid-cols-2 md:grid-cols-4 gap-3 pt-6 border-t border-stellar-border/60 text-xs">
-          <div className="rounded-2xl border border-stellar-border bg-stellar-dark/60 p-4">
-            <span className="text-slate-400 block mb-1">Active Streams</span>
-            <span className="text-xl sm:text-2xl font-black text-emerald-400 font-mono">
-              {metrics.activeCount}
-            </span>
-          </div>
-
-          <div className="rounded-2xl border border-stellar-border bg-stellar-dark/60 p-4">
-            <span className="text-slate-400 block mb-1">Total Streams Indexed</span>
-            <span className="text-xl sm:text-2xl font-black text-slate-200 font-mono">
-              {metrics.streamCount}
-            </span>
-          </div>
-
-          <div className="rounded-2xl border border-stellar-border bg-stellar-dark/60 p-4">
-            <span className="text-slate-400 block mb-1">Total Volume Streamed</span>
-            <span className="text-xl sm:text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-emerald-400 font-mono">
-              {metrics.totalDeposited} <span className="text-xs text-slate-400">XLM</span>
-            </span>
-          </div>
-
-          <div className="rounded-2xl border border-stellar-border bg-stellar-dark/60 p-4">
-            <span className="text-slate-400 block mb-1">Locked Protocol TVL</span>
-            <span className="text-xl sm:text-2xl font-black text-cyan-300 font-mono">
-              {metrics.totalRemaining} <span className="text-xs text-slate-400">XLM</span>
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Tabs, Search & Filters Bar */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
-        {/* Perspective Tabs */}
-        <div className="flex rounded-2xl bg-stellar-card p-1 border border-stellar-border">
-          <button
-            type="button"
-            onClick={() => setActiveTab('outgoing')}
-            className={`flex items-center space-x-2 rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
-              activeTab === 'outgoing'
-                ? 'bg-stellar-hover text-white shadow-sm border border-stellar-border/80'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <ArrowUpRight className="h-3.5 w-3.5 text-stellar-cyan" />
-            <span>Outgoing (Created)</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('incoming')}
-            className={`flex items-center space-x-2 rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
-              activeTab === 'incoming'
-                ? 'bg-stellar-hover text-white shadow-sm border border-stellar-border/80'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <ArrowDownLeft className="h-3.5 w-3.5 text-emerald-400" />
-            <span>Incoming (Received)</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('all')}
-            className={`flex items-center space-x-2 rounded-xl px-4 py-2 text-xs font-semibold transition-all ${
-              activeTab === 'all'
-                ? 'bg-stellar-hover text-white shadow-sm border border-stellar-border/80'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Layers className="h-3.5 w-3.5 text-slate-400" />
-            <span>Explore All</span>
-          </button>
-        </div>
-
-        {/* Search & Status Filters */}
-        <div className="flex items-center space-x-2 flex-1 max-w-md">
-          <div className="relative flex-1">
-            <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Search by ID or G... address"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-2xl border border-stellar-border bg-stellar-card/80 py-2 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:border-stellar-cyan focus:outline-none transition-colors"
-            />
-          </div>
-
-          {/* Status Filter Buttons */}
-          <div className="flex rounded-xl bg-stellar-card p-1 border border-stellar-border text-xs">
-            {(['ALL', 'ACTIVE', 'COMPLETED', 'CANCELED'] as StatusFilter[]).map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setStatusFilter(f)}
-                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-all ${
-                  statusFilter === f
-                    ? 'bg-stellar-hover text-white font-bold'
-                    : 'text-slate-400 hover:text-white'
-                }`}
+            <div className="flex flex-wrap gap-3 pt-2">
+              <Link
+                href="/plans/new"
+                className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-400 to-emerald-400 px-5 py-3 text-sm font-bold text-stellar-dark shadow-xl shadow-cyan-500/20 transition-opacity hover:opacity-95"
               >
-                {f === 'ALL' ? 'All' : f.slice(0, 3)}
+                <PlusCircle className="h-4 w-4" />
+                Create a plan
+              </Link>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isConnected) void connect();
+                  setTab('explore');
+                }}
+                className="inline-flex items-center gap-2 rounded-2xl border border-stellar-border bg-stellar-card/70 px-5 py-3 text-sm font-semibold text-slate-200 transition-colors hover:border-stellar-cyan/50"
+              >
+                Browse plans
+                <ArrowRight className="h-4 w-4" />
               </button>
+            </div>
+          </div>
+
+          <div className="grid w-full max-w-sm grid-cols-2 gap-3">
+            {[
+              { label: 'Plans', value: String(totalPlans) },
+              { label: 'Subscriptions', value: String(totalSubs) },
+              { label: 'Merchants', value: String(stats?.merchants ?? '—') },
+              { label: 'Settled', value: `${volume}` },
+            ].map((item) => (
+              <div
+                key={item.label}
+                className="rounded-2xl border border-stellar-border bg-stellar-dark/60 p-4"
+              >
+                <span className="block text-[11px] text-slate-400">{item.label}</span>
+                <span className="font-mono text-xl font-black text-white">
+                  {item.value}
+                </span>
+              </div>
             ))}
           </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setRefreshing(true);
-              fetchStreams();
-            }}
-            disabled={refreshing}
-            className="p-2 rounded-xl border border-stellar-border bg-stellar-card text-slate-300 hover:bg-stellar-hover transition-colors"
-            title="Refresh streams"
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          </button>
         </div>
+      </section>
+
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+        <div className="flex flex-wrap gap-1 rounded-2xl border border-stellar-border bg-stellar-card p-1">
+          {TABS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
+                tab === id
+                  ? 'bg-stellar-hover text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={loading}
+          className="flex items-center justify-center gap-2 self-start rounded-xl border border-stellar-border bg-stellar-card px-3 py-2 text-xs text-slate-300 hover:bg-stellar-hover disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
       </div>
 
-      {/* Wallet Warning if filtering by user address but wallet not connected */}
-      {!isConnected && (activeTab === 'outgoing' || activeTab === 'incoming') && (
-        <div className="rounded-3xl border border-cyan-500/30 bg-cyan-500/5 p-6 backdrop-blur-xl flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center space-x-3">
+      {requiresWallet && !isConnected && (
+        <div className="flex flex-col items-center justify-between gap-4 rounded-3xl border border-cyan-500/30 bg-cyan-500/5 p-6 sm:flex-row">
+          <div className="flex items-center gap-3">
             <div className="rounded-xl bg-cyan-500/10 p-2 text-stellar-cyan">
               <Wallet className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Connect Your Wallet</h3>
+              <h3 className="text-sm font-bold text-white">Connect your wallet</h3>
               <p className="text-xs text-slate-400">
-                Connect Freighter to view your personal outgoing and incoming payment streams.
+                Your plans and subscriptions are read straight from the chain by
+                address.
               </p>
             </div>
           </div>
-
           <button
             type="button"
-            onClick={() => connect()}
-            className="rounded-xl border border-cyan-500/40 bg-cyan-500/20 px-4 py-2 text-xs font-bold text-cyan-200 hover:bg-cyan-500/30 transition-colors"
+            onClick={() => void connect()}
+            className="rounded-xl border border-cyan-500/40 bg-cyan-500/20 px-4 py-2 text-xs font-bold text-cyan-200 hover:bg-cyan-500/30"
           >
             Connect Freighter
           </button>
         </div>
       )}
 
-      {/* Streams Grid */}
-      {loading ? (
-        <div className="flex h-64 flex-col items-center justify-center space-y-3">
-          <Loader2 className="h-8 w-8 animate-spin text-stellar-cyan" />
-          <p className="text-xs text-slate-400">Loading stream records...</p>
+      {error && (
+        <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-xs text-rose-300">
+          {error}
         </div>
-      ) : filteredStreams.length === 0 ? (
-        <div className="glass-panel rounded-3xl p-12 text-center max-w-lg mx-auto">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-stellar-hover text-slate-400">
-            <Layers className="h-6 w-6" />
-          </div>
-          <h3 className="text-base font-bold text-white">No Streams Found</h3>
-          <p className="mt-1 text-xs text-slate-400">
-            {searchQuery
-              ? 'No streams match your search filter criteria.'
-              : activeTab === 'outgoing'
-              ? 'You have not created any outgoing streams yet.'
-              : activeTab === 'incoming'
-              ? 'No streams directed to your address have been indexed.'
-              : 'No payment streams exist on this network yet.'}
-          </p>
+      )}
 
-          <div className="mt-6">
-            <Link
-              href="/create"
-              className="inline-flex items-center space-x-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-400 px-4 py-2.5 text-xs font-bold text-stellar-dark hover:opacity-90 shadow-md shadow-cyan-500/20"
-            >
-              <PlusCircle className="h-4 w-4" />
-              <span>Create First Stream</span>
-            </Link>
-          </div>
+      {loading ? (
+        <div className="flex h-60 flex-col items-center justify-center gap-3">
+          <Loader2 className="h-7 w-7 animate-spin text-stellar-cyan" />
+          <p className="text-xs text-slate-400">Reading the contract…</p>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filteredStreams.map((stream) => (
-            <StreamCard
-              key={stream.id.toString()}
-              stream={stream}
-              perspective={activeTab === 'incoming' ? 'recipient' : 'sender'}
-              tokenSymbol="XLM"
+      ) : tab === 'keeper' ? (
+        subs.length === 0 ? (
+          <EmptyState
+            icon={Zap}
+            title="Nothing to settle"
+            body="No subscription is due right now. The keeper queue is derived from the contract clock, not a scheduler."
+          />
+        ) : (
+          <>
+            <p className="text-xs text-slate-400">
+              These subscriptions are due. Anyone can charge one; the contract only
+              pulls the approved cycle price.
+            </p>
+            <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+              {subs.map((sub) => (
+                <SubscriptionCard
+                  key={sub.id.toString()}
+                  subscription={sub}
+                  plan={planLookup[sub.planId.toString()]}
+                  perspective="merchant"
+                />
+              ))}
+            </div>
+          </>
+        )
+      ) : (tab === 'plans' || tab === 'explore') && plans.length > 0 ? (
+        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+          {plans.map((plan) => (
+            <PlanCard key={plan.id.toString()} plan={plan} />
+          ))}
+        </div>
+      ) : tab === 'subscriptions' && subs.length > 0 ? (
+        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+          {subs.map((sub) => (
+            <SubscriptionCard
+              key={sub.id.toString()}
+              subscription={sub}
+              plan={planLookup[sub.planId.toString()]}
+              perspective="subscriber"
             />
           ))}
         </div>
+      ) : (
+        <EmptyState
+          icon={tab === 'subscriptions' ? CalendarClock : tab === 'plans' ? Store : Layers}
+          title={
+            tab === 'subscriptions'
+              ? 'No subscriptions yet'
+              : tab === 'plans'
+                ? 'No plans yet'
+                : 'No plans on this network'
+          }
+          body={
+            tab === 'subscriptions'
+              ? 'Browse plans and subscribe with a capped SEP-41 allowance. You can pause or cancel at any time.'
+              : tab === 'plans'
+                ? 'Publish your first plan. Merchants only pay network fees; there is no protocol fee.'
+                : 'Nothing has been published to this Stanza contract yet.'
+          }
+          action={
+            tab === 'subscriptions' ? (
+              <button
+                type="button"
+                onClick={() => setTab('explore')}
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 to-emerald-400 px-4 py-2.5 text-xs font-bold text-stellar-dark"
+              >
+                <Layers className="h-4 w-4" /> Browse plans
+              </button>
+            ) : (
+              <Link
+                href="/plans/new"
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 to-emerald-400 px-4 py-2.5 text-xs font-bold text-stellar-dark"
+              >
+                <PlusCircle className="h-4 w-4" /> Create a plan
+              </Link>
+            )
+          }
+        />
       )}
+
+      <p className="text-center text-[11px] text-slate-500">
+        Contract{' '}
+        <span className="font-mono text-slate-400">
+          {CONFIG.contractId ? shortAddress(CONFIG.contractId) : 'not configured'}
+        </span>{' '}
+        · reads fall back to direct Soroban RPC queries when the indexer is offline.
+      </p>
+    </div>
+  );
+}
+
+function EmptyState({
+  icon: Icon,
+  title,
+  body,
+  action,
+}: {
+  icon: typeof Users;
+  title: string;
+  body: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="glass-panel mx-auto max-w-lg rounded-3xl p-10 text-center">
+      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-stellar-hover text-slate-400">
+        <Icon className="h-6 w-6" />
+      </div>
+      <h2 className="text-base font-bold text-white">{title}</h2>
+      <p className="mt-1 text-xs text-slate-400">{body}</p>
+      {action && <div className="mt-6 flex justify-center">{action}</div>}
     </div>
   );
 }

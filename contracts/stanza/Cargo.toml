@@ -1,0 +1,27 @@
+[package]
+name = "stanza-subscriptions"
+version = "0.1.0"
+edition = "2021"
+description = "Stanza: non-custodial recurring subscriptions on Stellar Soroban"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-options = false
+lto = true
+
+[features]
+default = []
+
+[dependencies]
+soroban-sdk = "29.0.1"
+
+[dev-dependencies]
+soroban-sdk = { version = "29.0.1", features = ["testutils"] }

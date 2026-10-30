@@ -2,7 +2,7 @@
   "name": "web",
   "version": "0.1.0",
   "private": true,
-  "description": "Next.js frontend for StellarStream continuous payment streaming protocol",
+  "description": "Stanza web app: merchant plans and subscriber billing on Stellar Soroban",
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
@@ -10,9 +10,9 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@stellar-stream/sdk": "workspace:*",
+    "@stanza/sdk": "workspace:*",
     "@stellar/freighter-api": "^3.0.0",
-    "@stellar/stellar-sdk": "^13.0.0",
+    "@stellar/stellar-sdk": "^17.4.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.475.0",
     "next": "^14.2.24",

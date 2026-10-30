@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  transpilePackages: ['@stellar-stream/sdk'],
+  transpilePackages: ['@stanza/sdk'],
   webpack: (config) => {
     config.resolve.fallback = {
       ...config.resolve.fallback,

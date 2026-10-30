@@ -1,72 +1,74 @@
 #!/usr/bin/env bash
+# Applies the Stanza repository settings: labels, branch protection, merge
+# policy, discussions. Requires an admin token.
 #
-# Apply the repository settings the Drips Wave program expects for
-# stellar-stream-app:
-#   1. Enable GitHub Pages (source: GitHub Actions) for the docs site
-#   2. Add discoverability topics
-#   3. Protect `main` (PRs required, required status checks)
-#
-# These are repository-admin operations. Run with an authenticated gh CLI that
-# has admin rights on the repository:
-#   bash scripts/setup-repo-settings.sh
-#
-# Required status check names MUST match the job names in the workflows:
-#   - "Lint, Test & Build Monorepo"  (.github/workflows/ci.yml)
-#   - "Build documentation"          (.github/workflows/ci.yml)
-# Status checks only become selectable after they have run at least once, so
-# push a commit (or re-run CI) before applying protection.
+#   REPO=stanza-labs/stanza ./scripts/setup-repo-settings.sh
 set -euo pipefail
 
-REPO="${REPO:-Deyanju23/stellar-stream-app}"
-BRANCH="${BRANCH:-main}"
+REPO="${REPO:-stanza-labs/stanza}"
 
-TOPICS='["stellar","soroban","stellar-network","payment-streaming","money-streaming","defi","nextjs","typescript","smart-contracts","stellar-wave"]'
+command -v gh >/dev/null 2>&1 || {
+  echo "GitHub CLI (gh) is required: https://cli.github.com" >&2
+  exit 1
+}
 
-echo "==> Enabling GitHub Pages (source: GitHub Actions) on $REPO ..."
-if gh api "repos/$REPO/pages" >/dev/null 2>&1; then
-  echo "    Pages already enabled."
-else
-  gh api --method POST "repos/$REPO/pages" -f build_type=workflow >/dev/null
-  echo "    Pages enabled."
-fi
+label() {
+  gh label create "$1" --repo "$REPO" --color "$2" --description "$3" --force >/dev/null
+}
 
-echo "==> Setting topics ..."
-gh api --method PUT "repos/$REPO/topics" --input - <<JSON
-{ "names": $TOPICS }
-JSON
-echo "    Topics set."
+echo "→ Labels"
+label "Stellar Wave" "7B3FE4" "Scoped for the Stellar Drips Wave program"
+label "good first issue" "7057ff" "Small, well-bounded change"
+label "complexity: low" "0E8A16" "A few hours"
+label "complexity: mid" "FBCA04" "A day or two"
+label "complexity: high" "B60205" "Several days, design involved"
+label "contract" "5319E7" "Soroban contract (Rust)"
+label "sdk" "1D76DB" "TypeScript SDK"
+label "indexer" "006B75" "Event indexer and REST API"
+label "web" "C5DEF5" "Next.js application"
+label "docs" "D4C5F9" "Documentation"
+label "testing" "BFD4F2" "Tests and CI"
 
-echo "==> Protecting $BRANCH ..."
-gh api \
-  --method PUT \
-  -H "Accept: application/vnd.github+json" \
-  "repos/$REPO/branches/$BRANCH/protection" \
-  --input - <<'JSON'
+echo "→ Repository features"
+gh api -X PATCH "repos/${REPO}" \
+  -F has_discussions=true \
+  -F allow_squash_merge=true \
+  -F allow_merge_commit=false \
+  -F allow_rebase_merge=false \
+  -F delete_branch_on_merge=true \
+  -F allow_auto_merge=true >/dev/null
+
+echo "→ Branch protection for main"
+gh api -X PUT "repos/${REPO}/branches/main/protection" --input - >/dev/null <<'JSON'
 {
   "required_status_checks": {
     "strict": true,
     "contexts": [
-      "Lint, Test & Build Monorepo",
-      "Build documentation"
+      "Soroban contract (fmt, test, wasm)",
+      "SDK, indexer and web app",
+      "Documentation build"
     ]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": {
     "dismiss_stale_reviews": true,
-    "require_last_push_approval": true,
-    "required_approving_review_count": 1
+    "require_code_owner_reviews": false,
+    "required_approving_review_count": 1,
+    "require_last_push_approval": true
   },
   "restrictions": null,
-  "required_linear_history": true,
+  "required_conversation_resolution": true,
   "allow_force_pushes": false,
-  "allow_deletions": false,
-  "required_conversation_resolution": true
+  "allow_deletions": false
 }
 JSON
-echo "    Branch protection applied."
+
+echo "→ Pages (source: GitHub Actions)"
+gh api -X POST "repos/${REPO}/pages" -f build_type=workflow >/dev/null 2>&1 || \
+  gh api -X PUT "repos/${REPO}/pages" -f build_type=workflow >/dev/null 2>&1 || true
 
 echo
-echo "Done."
-echo "  Pages:  https://github.com/$REPO/settings/pages"
-echo "  Topics: https://github.com/$REPO/settings"
-echo "  Branch: https://github.com/$REPO/settings/branches"
+echo "Applied to ${REPO}. Remaining manual steps:"
+echo "  • Confirm the Pages workflow has deployed: https://${REPO%%/*}.github.io/${REPO##*/}/"
+echo "  • Add the production indexer URL as a repository variable if you deploy one"
+echo "  • Enable secret scanning and Dependabot alerts in Settings → Code security"

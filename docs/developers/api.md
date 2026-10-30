@@ -1,137 +1,182 @@
 # Indexer API
 
-The indexer subscribes to the `stream` contract's events over Soroban RPC,
-persists them to SQLite, and serves a small read-only REST API on port
-`3001` by default.
+The indexer follows the Stanza contract's events over Soroban RPC, persists a
+read model in SQLite, and serves a read-only REST API on port `3001`.
 
 Base URL: `NEXT_PUBLIC_INDEXER_URL` (local: `http://localhost:3001`).
 
-The indexer is a cache. If it is unreachable, the app falls back to querying the
-chain directly for a single stream by id — it never treats the cache as final.
+The indexer is a cache. Every app action is submitted to the contract, and every
+state read has a direct Soroban RPC fallback. Treat this API as an acceleration
+layer and an event archive, never as the source of truth.
 
 ## `GET /health`
-
-Liveness and sync position.
 
 ```json
 {
   "status": "ok",
-  "service": "stellar-stream-indexer",
-  "lastLedger": 1234567,
-  "timestamp": "2026-01-01T00:00:00.000Z"
+  "service": "stanza-indexer",
+  "lastLedger": 5458669,
+  "timestamp": "2026-10-29T23:40:00.000Z"
 }
 ```
 
-## `GET /api/streams`
-
-List streams, newest first.
-
-| Query param | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `limit` | integer | 50 | clamped to 1–100 |
-| `offset` | integer | 0 | |
+## `GET /api/stats`
 
 ```json
 {
-  "streams": [ /* StreamRecord[] */ ],
-  "limit": 50,
-  "offset": 0
+  "plans": 1,
+  "subscriptions": 1,
+  "activeSubscriptions": 1,
+  "merchants": 1,
+  "volume": "10000000"
 }
 ```
 
-## `GET /api/streams/{id}`
+`volume` is the sum of `total_paid` across subscriptions, in base units, as a
+decimal string.
 
-One stream by id.
+## Plans
+
+### `GET /api/plans?limit=50&offset=0`
+
+```json
+{ "plans": [ /* PlanRecord[] */ ], "limit": 50, "offset": 0 }
+```
+
+### `GET /api/plans/{id}`
 
 ```json
 {
-  "stream": {
+  "plan": {
     "id": 0,
-    "sender": "G...",
-    "recipient": "G...",
+    "merchant": "GANMJ…",
     "token": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-    "deposit_amount": "10000000000",
-    "start_time": 1735689600,
-    "stop_time": 1738281600,
-    "rate_per_second": "3858",
-    "remaining_balance": "10000000000",
-    "recipient_withdrawn": "0",
-    "is_canceled": 0,
-    "cancelable": 1,
-    "created_at": 1735689600,
-    "updated_at": 1735689600
+    "amount": "10000000",
+    "period": 2592000,
+    "trial_period": 0,
+    "max_cycles": 12,
+    "active": 1,
+    "created_at": 1793317005,
+    "updated_at": 1793317005
   }
 }
 ```
 
-Errors: `400` for a non-numeric id, `404` if the stream is unknown.
+Errors: `400` invalid id, `404` unknown plan.
 
-## `GET /api/streams/sender/{address}`
-
-All streams created by an address, newest first.
+### `GET /api/plans/merchant/{address}`
 
 ```json
-{ "streams": [ /* StreamRecord[] */ ] }
+{ "plans": [ /* PlanRecord[] */ ] }
 ```
 
-## `GET /api/streams/recipient/{address}`
-
-All streams paid to an address, newest first.
+### `GET /api/plans/{id}/subscriptions`
 
 ```json
-{ "streams": [ /* StreamRecord[] */ ] }
+{ "subscriptions": [ /* SubscriptionRecord[] */ ] }
 ```
 
-## `GET /api/events/{streamId}`
+## Subscriptions
 
-The full event history for a stream, oldest first — the audit trail.
+### `GET /api/subscriptions?limit=50&offset=0&status=active`
+
+`status` is optional: `active`, `paused`, `canceled`, `completed`.
+
+```json
+{ "subscriptions": [ /* SubscriptionRecord[] */ ], "limit": 50, "offset": 0 }
+```
+
+### `GET /api/subscriptions/{id}`
+
+```json
+{
+  "subscription": {
+    "id": 0,
+    "plan_id": 0,
+    "subscriber": "GBQDD…",
+    "started_at": 1793317005,
+    "next_charge_at": 1795909005,
+    "cycles_charged": 1,
+    "total_paid": "10000000",
+    "status": "active",
+    "created_at": 1793317005,
+    "updated_at": 1793317005
+  }
+}
+```
+
+### `GET /api/subscriptions/subscriber/{address}`
+
+```json
+{ "subscriptions": [ /* SubscriptionRecord[] */ ] }
+```
+
+### `GET /api/subscriptions/due?limit=50`
+
+The keeper queue: active subscriptions on active plans whose `next_charge_at`
+has passed and whose cycle cap is not reached.
+
+```json
+{
+  "dueAt": 1796000000,
+  "subscriptions": [ /* SubscriptionRecord[] */ ]
+}
+```
+
+### `GET /api/subscriptions/{id}/charges`
+
+```json
+{
+  "charges": [
+    {
+      "id": 1,
+      "sub_id": 0,
+      "plan_id": 0,
+      "amount": "10000000",
+      "cycles_charged": 1,
+      "ledger": 5458701,
+      "ledger_closed_at": "2026-10-29T23:37:12Z",
+      "tx_hash": "…"
+    }
+  ]
+}
+```
+
+## Events
+
+### `GET /api/events/{subId}`
+
+Raw event archive for one subscription, oldest first.
 
 ```json
 {
   "events": [
     {
       "id": 1,
-      "stream_id": 0,
-      "event_type": "StreamCreated",
-      "ledger": 1234500,
-      "ledger_closed_at": "2026-01-01T00:00:05Z",
-      "data": { "sender": "G...", "recipient": "G...", "stream_id": 0 },
-      "tx_hash": "ab12…",
-      "created_at": 1735689605
+      "sub_id": 0,
+      "event_type": "charged",
+      "ledger": 5458701,
+      "ledger_closed_at": "2026-10-29T23:37:12Z",
+      "data": "{ \"sub_id\": 0, \"amount\": \"10000000\" }",
+      "tx_hash": "…"
     }
   ]
 }
 ```
 
-`event_type` is one of `StreamCreated`, `TokensWithdrawn`, or `StreamCanceled`.
+`event_type` is one of `subscribed`, `charged`, `paused`, `resumed`, `canceled`.
 
-## `StreamRecord`
+## Amounts
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `id` | number | Stream id |
-| `sender` / `recipient` | string | Stellar addresses |
-| `token` | string | Token contract id |
-| `deposit_amount` | string | Base units, as a decimal string |
-| `start_time` / `stop_time` | number | Unix seconds |
-| `rate_per_second` | string | `deposit_amount ÷ duration` |
-| `remaining_balance` | string | Tokens still held for this stream |
-| `recipient_withdrawn` | string | Cumulative withdrawn |
-| `is_canceled` | number | `0` or `1` |
-| `cancelable` | number | `0` or `1` |
-| `created_at` / `updated_at` | number | Unix seconds the row was written |
-
-!!! note "Amounts are strings, not numbers"
-    `deposit_amount`, `rate_per_second`, `remaining_balance`, and
-    `recipient_withdrawn` are `i128` values stored as decimal strings so no
-    precision is lost in JSON. Parse them with `BigInt(...)`.
+`amount`, `total_paid`, and `volume` are `i128` values serialized as decimal
+strings so JavaScript never loses precision. Parse them with `BigInt(...)`.
 
 ## Running it
 
 ```bash
-pnpm --filter indexer dev     # tsx watch, port 3001
-pnpm --filter indexer build && pnpm --filter indexer start   # production
+pnpm --filter @stanza/indexer dev                     # tsx watch, :3001
+pnpm --filter @stanza/indexer build && node indexer/dist/server.js
 ```
 
-Required env: `STREAM_CONTRACT_ID`, `SOROBAN_RPC_URL`. See
+Required env: `STANZA_CONTRACT_ID`, `SOROBAN_RPC_URL`. See
 [Environment variables](environment.md).

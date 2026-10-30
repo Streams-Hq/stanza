@@ -14,7 +14,6 @@ body {
   min-height: 100vh;
 }
 
-/* Glassmorphism panel styling */
 .glass-panel {
   background: rgba(13, 17, 39, 0.75);
   backdrop-filter: blur(16px);
@@ -32,20 +31,12 @@ body {
   box-shadow: 0 12px 35px -10px rgba(0, 229, 255, 0.15);
 }
 
-/* Neon accent gradients */
 .text-gradient-cyan {
   background: linear-gradient(135deg, #00e5ff 0%, #00f5a0 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
-.text-gradient-purple {
-  background: linear-gradient(135deg, #a855f7 0%, #00e5ff 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-/* Custom glowing numeric display */
 .font-mono-numeric {
   font-variant-numeric: tabular-nums;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;

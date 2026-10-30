@@ -1,95 +1,97 @@
 # Introduction
 
-## What StellarStream is
-
-StellarStream is a protocol for streaming payments on Stellar. Instead of
-sending a lump sum, a sender locks a deposit in a Soroban contract next to a
-start time and a stop time. The deposit unlocks to the recipient continuously,
-second by second, until the stop time. The recipient can withdraw whatever has
-accrued whenever they want, as many times as they want.
-
-One sentence: **lock funds once, and they unlock to the recipient every second
-until the stream ends.**
-
 ## The problem
 
-Recurring payouts — salaries, contractor retainers, vesting schedules,
-subscriptions, grant disbursements — are usually handled in one of two ways:
+Recurring billing is the one payment pattern Stellar does not have a native
+primitive for. Merchants either:
 
-1. **Lump-sum transfers** on a fixed date. The recipient's money arrives in
-   one chunk, and until that date the balance they have *earned* is invisible
-   and inaccessible.
-2. **Off-chain bookkeeping.** A spreadsheet or payroll system tracks what is
-   owed. The number is not auditable by the recipient and depends entirely on
-   trusting the payer's records.
+1. **Ask subscribers to send manually every month.** Churn is high, and every
+   cycle needs a human on both sides.
+2. **Use a custodial processor.** The subscriber signs away a card or an API key
+   and trusts an intermediary with the mandate, the schedule, and the money.
+3. **Prepay a balance.** The subscriber hands over funds up front, and the
+   merchant draws it down. That is a loan to the merchant, not a subscription.
 
-Both leave the receiving party unable to see or claim what they have already
-earned. A stream fixes that: at any second, the recipient can read an exact
-number and withdraw it.
+Streaming protocols solve a neighbouring problem — a deposit that unlocks
+linearly — but not this one. A stream locks the whole amount up front and pays
+out continuously. Subscriptions are the opposite shape: a small, discrete,
+repeating pull, revocable at any moment, with the money staying with the
+subscriber between charges.
 
-The scale of the flow this touches is large. The World Bank estimates global
-remittance flows reached about **$905 billion in 2024**, up 4.6% from $865
-billion in 2023, and the average cost of sending remittances was **6.36%** in
-Q3 2025 against the United Nations target of 3% by 2030.[^1] Recurring,
-cross-border payouts are exactly the case where a per-second, auditable balance
-beats a monthly batch.
+## What Stanza does
 
-## Why Stellar, specifically
+A merchant publishes a **plan**: token, price per cycle, cycle length, optional
+trial, and an optional cap on the number of paid cycles. A subscriber grants the
+contract a **SEP-41 allowance** for a few cycles and calls `subscribe`. The
+contract stores the schedule.
 
-The Stellar-specific reasons matter, not generic "blockchain is fast and cheap"
-claims:
+From then on the rule is one sentence:
 
-- **Settlement speed.** Stellar ledgers close every few seconds, so a
-  withdrawal is confirmed while the user is still looking at the screen. A
-  streaming UI that updates at 60 frames per second is pointless if the
-  withdrawal takes a minute.
-- **Predictable, sub-cent fees.** A stream can be withdrawn frequently. If each
-  withdrawal cost dollars, recipients would batch them and the "stream" would
-  collapse back into lump sums.
-- **Soroban.** The accrual rule itself lives on-chain. The contract computes
-  the earned amount from the ledger timestamp, so the number is authoritative
-  and does not depend on a server the recipient has to trust.
-- **Stellar Asset Contract (SAC).** Native XLM and any Stellar-issued asset can
-  be streamed through the same code path, because the contract treats the token
-  as any other token contract.
-- **Network reliability.** Stellar reported **3.6 billion transactions in 2025**
-  and 99.99% uptime, with 21.5 billion lifetime operations.[^2]
+> **After each cycle is due, anyone may pull exactly one cycle's price from the
+> subscriber to the merchant, and never more.**
 
-## How it works, step by step
+The subscriber's funds sit in their own wallet until the instant of a charge.
+Cancelling is unilateral and immediate, and a plan can never exceed its cap or
+charge early, because both checks are in the contract.
 
-1. **Fund and open.** A sender calls `create_stream` with the recipient, the
-   token, the deposit, the start and stop times, and whether the stream is
-   cancellable. The contract transfers the deposit from the sender into itself
-   and stores a `Stream` record. It returns a stream id.
-2. **Accrue.** From `start_time`, the contract computes earned amount as
-   `deposit_amount × elapsed ÷ duration` using the current ledger timestamp.
-   Nothing is stored per second — the balance is derived, so it never drifts.
-3. **Withdraw.** The recipient calls `withdraw` for any amount up to what has
-   accrued and not yet been taken. The contract pays it out and keeps the stream
-   running.
-4. **Optionally cancel.** If the stream is cancellable, the sender can call
-   `cancel` before it ends. The recipient immediately receives everything
-   already earned; the sender is refunded the rest.
-5. **Complete.** At `stop_time` the recipient has earned the full deposit and
-   can withdraw the remainder at any point.
+## Why this is Stellar-native
+
+Every functional piece is a Stellar primitive, not a wrapper around an external
+service:
+
+- **SEP-41 allowances.** `approve` creates the spending mandate, and
+  `transfer_from` executes it. The mandate is bounded by amount and by ledger,
+  is visible on-chain, and can be revoked by the subscriber at any time.
+- **Stellar Asset Contract.** XLM and any Stellar-issued asset can be billed
+  through the same code path, because the contract talks to the token through
+  the SEP-41 interface. No bespoke token adapter, no bridge.
+- **Ledger timestamp.** The cycle clock is `env.ledger().timestamp()`, not a
+  server cron. Two different keepers computing "is this due?" get the same
+  answer from the same ledger.
+- **Soroban persistent storage + TTL.** Plans and subscriptions are contract
+  storage entries whose rent is pre-paid well past their billing horizon, so a
+  live subscription cannot silently fall out of state.
+- **Contract events.** `plan_new`, `sub_new`, `charged`, `paused`, `resumed`,
+  `canceled`, and `plan_act` are emitted by the contract. The indexer and any
+  third party rebuild the same history from the same events.
+- **Soroban RPC + Freighter.** Reads are simulations; writes are prepared
+  transactions signed in the wallet. No backend holds a key.
+- **Stellar fees.** A charge costs one network fee, a fraction of a cent. That
+  is what makes per-cycle on-chain settlement economic at all.
+
+## How a billing cycle works
+
+1. **Publish.** `create_plan(merchant, token, amount, period, trial_period, max_cycles)`
+   requires the merchant's signature and stores the plan. Nothing is escrowed.
+2. **Authorise.** The subscriber signs a SEP-41 `approve` naming the Stanza
+   contract as spender, for N cycles, with an expiry ledger.
+3. **Subscribe.** `subscribe(subscriber, plan_id)` requires the subscriber's
+   signature and records `next_charge_at = now + trial_period`.
+4. **Charge.** Once the timestamp reaches `next_charge_at`, `charge(sub_id)` may
+   be called by anyone. It pulls `amount` once, advances `next_charge_at` by
+   `period`, and marks the subscription `completed` if the plan's cap is reached.
+5. **Control.** The subscriber can `pause`, `resume`, `cancel`, and can revoke or
+   top up the allowance in their wallet at any time. The merchant can retire a
+   plan, which stops future charges without touching existing balances.
 
 ## What is in this repository
 
-- **`packages/sdk`** — a typed TypeScript client over the contract: it builds
-  and simulates transactions, encodes arguments to XDR, parses return values,
-  and mirrors the on-chain integer math for live UI counters.
-- **`indexer`** — a long-running service that subscribes to the contract's
-  events over Soroban RPC and exposes them over a small REST API, so the
-  frontend can list streams without scanning every id on-chain.
-- **`apps/web`** — the Next.js frontend: a dashboard, a stream-creation form, a
-  detailed stream page with a live balance visualizer, and Freighter wallet
-  integration for signing.
+This is a single, self-contained monorepo. The contract is **not** in a separate
+repository.
 
-The Soroban contract itself is specified and documented in
-[stellar-stream-contract](https://github.com/Deyanju23/stellar-stream-contract).
-This site restates its interface in
-[Contract reference](contract-reference.md) so you do not have to cross-reference
-repositories.
+- **`contracts/stanza`** — the Soroban contract in Rust, with 15 unit tests that
+  exercise the full lifecycle on a real SAC token.
+- **`packages/sdk`** — the typed TypeScript client: transaction builders,
+  XDR encoding, plan/subscription parsers, allowance helpers, event decoding,
+  and the billing math mirrored exactly from Rust.
+- **`indexer`** — a service that follows contract events over Soroban RPC,
+  persists a read model in SQLite, and exposes a REST API including a keeper
+  queue of everything due now.
+- **`apps/web`** — the Next.js app: merchant plans, plan discovery,
+  subscribe-with-allowance, subscriber controls, and a permissionless charge
+  button.
 
-[^1]: World Bank — [Remittance Prices Worldwide](https://remittanceprices.worldbank.org/) (average cost 6.36% in Q3 2025) and [Migration Data Portal](https://www.migrationdataportal.org/themes/remittances-overview) (global flows $865B → $905B, 2023 → 2024), citing World Bank *Migration and Development Brief*.
-[^2]: Stellar — [End of Year 2025 Report: Execution at Scale](https://stellar.org/blog/foundation-news/2025-year-in-review).
+!!! note "The chain is authoritative"
+    The indexer is a cache. Every page falls back to direct Soroban RPC
+    simulations when the indexer is unavailable, and every action is submitted
+    to the contract, not to the API.

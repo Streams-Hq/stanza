@@ -1,0 +1,16 @@
+{
+  "network": "testnet",
+  "networkPassphrase": "Test SDF Network ; September 2015",
+  "rpcUrl": "https://soroban-testnet.stellar.org",
+  "contractId": "CDGIYCP56ZAC5ZVTJVHJQ5H7OLZSCDU3DFA77VWXT74N47MW6ZBV4FDP",
+  "wasm": "contracts/stanza/target/wasm32v1-none/release/stanza_subscriptions.wasm",
+  "wasmSha256": "4638029cba67555f31ef4404e3c08b3fa507f987cf291308a7dfc445245ebf38",
+  "deployer": "GANMJTFQPOG2XD4VEXO3IBEDANFX6FKLA5TKY3W2B6DTVEKT7I6FQRL5",
+  "demoMerchant": "GANMJTFQPOG2XD4VEXO3IBEDANFX6FKLA5TKY3W2B6DTVEKT7I6FQRL5",
+  "demoSubscriber": "GBQDDMHXSFGASUDNGDCMFGV2LO2GJONZD2CNYRDDAHXO2QQZWS5OGFUK",
+  "demoPlanId": 0,
+  "demoSubscriptionId": 0,
+  "deployedAt": "2026-10-29T23:36:00.000Z",
+  "explorer": "https://stellar.expert/explorer/testnet/contract/CDGIYCP56ZAC5ZVTJVHJQ5H7OLZSCDU3DFA77VWXT74N47MW6ZBV4FDP",
+  "deployTransaction": "ecb8c29af6a1c8f285fa0a8c46985dca02d320e09c07bdfb3fa77e57d544a276"
+}

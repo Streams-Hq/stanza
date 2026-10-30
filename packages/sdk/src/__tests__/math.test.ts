@@ -1,113 +1,125 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  calculateLiveBalance,
-  computeEarned,
-  formatRatePerSecond,
+  billingProgress,
+  committedValue,
+  cyclesDue,
+  formatCountdown,
+  formatPeriod,
   formatUnits,
+  isDue,
   parseUnits,
 } from '../math.js';
-import { Stream } from '../types.js';
+import { Plan, Subscription } from '../types.js';
 
-describe('SDK Math & Precision Tests', () => {
-  const mockStream: Stream = {
-    id: 1n,
-    sender: 'GAEXAMPLE111111111111111111111111111111111111111111111111',
-    recipient: 'GAEXAMPLE222222222222222222222222222222222222222222222222',
-    token: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
-    depositAmount: 10_000_000_000n, // 1000 XLM (7 decimals)
-    startTime: 1000n,
-    stopTime: 2000n, // 1000 seconds duration
-    ratePerSecond: 10_000_000n, // 1 XLM/sec
-    remainingBalance: 10_000_000_000n,
-    recipientWithdrawn: 0n,
-    isCanceled: false,
-    cancelable: true,
-  };
+const PERIOD = 2_592_000n; // 30 days
 
-  it('computes 0 earned before or at start time', () => {
-    assert.equal(computeEarned(mockStream, 500n), 0n);
-    assert.equal(computeEarned(mockStream, 1000n), 0n);
+const plan: Plan = {
+  id: 0n,
+  merchant: 'GMERCHANT000000000000000000000000000000000000000000000000',
+  token: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+  amount: 5_0000000n, // 5 XLM
+  period: PERIOD,
+  trialPeriod: 0n,
+  maxCycles: 0,
+  active: true,
+};
+
+const sub: Subscription = {
+  id: 0n,
+  planId: 0n,
+  subscriber: 'GSUBSCRIBER00000000000000000000000000000000000000000000000',
+  startedAt: 1_000n,
+  nextChargeAt: 1_000n,
+  cyclesCharged: 0,
+  totalPaid: 0n,
+  status: 'active',
+};
+
+describe('cycle math', () => {
+  it('is not due before the first cycle starts', () => {
+    assert.equal(cyclesDue(plan, sub, 999n), 0);
+    assert.equal(isDue(plan, sub, 999n), false);
   });
 
-  it('computes exact 25% distribution at 250s', () => {
-    // 25% of 10_000_000_000 = 2_500_000_000
-    const earned = computeEarned(mockStream, 1250n);
-    assert.equal(earned, 2_500_000_000n);
+  it('is due exactly at next_charge_at', () => {
+    assert.equal(cyclesDue(plan, sub, 1_000n), 1);
+    assert.equal(isDue(plan, sub, 1_000n), true);
   });
 
-  it('computes exact midpoint 50% distribution', () => {
-    const earned = computeEarned(mockStream, 1500n);
-    assert.equal(earned, 5_000_000_000n);
+  it('counts a backlog, including the current cycle', () => {
+    assert.equal(cyclesDue(plan, sub, 1_000n + PERIOD * 2n), 3);
+    assert.equal(cyclesDue(plan, sub, 1_000n + PERIOD * 2n + 1n), 3);
   });
 
-  it('computes exact 100% distribution at or after stop time', () => {
-    assert.equal(computeEarned(mockStream, 2000n), 10_000_000_000n);
-    assert.equal(computeEarned(mockStream, 2500n), 10_000_000_000n);
+  it('never exceeds the plan cycle cap', () => {
+    const capped = { ...plan, maxCycles: 2 };
+    assert.equal(cyclesDue(capped, sub, 1_000n + PERIOD * 10n), 2);
   });
 
-  it('guarantees zero precision loss: earned + refundable == deposit at every second', () => {
-    const oddDepositStream: Stream = {
-      ...mockStream,
-      depositAmount: 3_333_333_333n, // Odd non-divisible number
-      startTime: 100n,
-      stopTime: 400n, // 300 seconds duration
-    };
-
-    for (let t = 100; t <= 400; t += 10) {
-      const balance = calculateLiveBalance(oddDepositStream, t);
-      assert.equal(
-        balance.recipientEarned + balance.senderRefundable,
-        oddDepositStream.depositAmount,
-        `Precision loss at timestamp ${t}`,
-      );
-    }
+  it('stops once the cap is reached', () => {
+    const capped = { ...plan, maxCycles: 2 };
+    const done = { ...sub, cyclesCharged: 2 };
+    assert.equal(cyclesDue(capped, done, 1_000n + PERIOD * 10n), 0);
   });
 
-  it('correctly deducts recipientWithdrawn from claimable', () => {
-    const partiallyWithdrawn: Stream = {
-      ...mockStream,
-      recipientWithdrawn: 2_000_000_000n, // Already took 200 XLM
-    };
-
-    // At midpoint: total earned is 5000, claimable is 5000 - 2000 = 3000
-    const balance = calculateLiveBalance(partiallyWithdrawn, 1500n);
-    assert.equal(balance.recipientEarned, 5_000_000_000n);
-    assert.equal(balance.recipientClaimable, 3_000_000_000n);
-    assert.equal(balance.senderRefundable, 5_000_000_000n);
-    assert.equal(balance.progressFraction, 0.5);
+  it('is never due for a paused, canceled, completed or retired subscription', () => {
+    const now = 1_000n + PERIOD;
+    assert.equal(cyclesDue(plan, { ...sub, status: 'paused' }, now), 0);
+    assert.equal(cyclesDue(plan, { ...sub, status: 'canceled' }, now), 0);
+    assert.equal(cyclesDue(plan, { ...sub, status: 'completed' }, now), 0);
+    assert.equal(cyclesDue({ ...plan, active: false }, sub, now), 0);
   });
 
-  it('handles canceled stream state gracefully', () => {
-    const canceledStream: Stream = {
-      ...mockStream,
-      isCanceled: true,
-      remainingBalance: 0n,
-      recipientWithdrawn: 3_500_000_000n,
-    };
+  it('reports progress, countdown and remaining cycles', () => {
+    const half = billingProgress(
+      plan,
+      { ...sub, nextChargeAt: 1_000n + PERIOD },
+      1_000n + PERIOD / 2n,
+    );
+    assert.equal(half.dueCycles, 0);
+    assert.equal(half.cycleProgress, 0.5);
+    assert.equal(half.secondsUntilNext, Number(PERIOD / 2n));
+    assert.equal(half.cyclesRemaining, null);
 
-    const balance = calculateLiveBalance(canceledStream, 1500n);
-    assert.equal(balance.recipientClaimable, 0n);
-    assert.equal(balance.senderRefundable, 0n);
-    assert.equal(balance.recipientEarned, 3_500_000_000n);
+    const capped = billingProgress(
+      { ...plan, maxCycles: 12 },
+      { ...sub, cyclesCharged: 3 },
+      1_000n,
+    );
+    assert.equal(capped.cyclesRemaining, 9);
+    assert.equal(capped.dueCycles, 1);
+    assert.equal(capped.cycleProgress, 1);
+    assert.equal(capped.secondsUntilNext, 0);
   });
+});
 
-  it('formats units and parses units consistently without precision loss', () => {
-    const stroops = 1234567890n;
-    const formatted = formatUnits(stroops, 7);
-    assert.equal(formatted, '123.4567890');
-
-    const parsed = parseUnits(formatted, 7);
-    assert.equal(parsed, stroops);
-
-    const zeroFormatted = formatUnits(0n, 7);
-    assert.equal(zeroFormatted, '0.0000000');
+describe('formatting', () => {
+  it('round-trips base units without precision loss', () => {
+    assert.equal(formatUnits(1234567890n, 7), '123.4567890');
+    assert.equal(parseUnits('123.4567890', 7), 1234567890n);
+    assert.equal(formatUnits(0n, 7), '0.0000000');
     assert.equal(parseUnits('0', 7), 0n);
+    assert.equal(parseUnits('-1.5', 7), -15000000n);
   });
 
-  it('calculates human-readable rate per second', () => {
-    // 1000 XLM over 1000 seconds = 1.0000000 XLM/sec
-    const rate = formatRatePerSecond(10_000_000_000n, 1000n, 7);
-    assert.equal(rate, '1.0000000');
+  it('labels billing periods', () => {
+    assert.equal(formatPeriod(86_400n), '1 day');
+    assert.equal(formatPeriod(604_800n), '7 days');
+    assert.equal(formatPeriod(PERIOD), '30 days');
+    assert.equal(formatPeriod(3_600n), '1 hour');
+    assert.equal(formatPeriod(900n), '15 minutes');
+    assert.equal(formatPeriod(45n), '45 seconds');
+  });
+
+  it('formats countdowns', () => {
+    assert.equal(formatCountdown(0), 'due now');
+    assert.equal(formatCountdown(90_061), '1d 1h 1m');
+    assert.equal(formatCountdown(45), '45s');
+  });
+
+  it('computes committed value only for capped plans', () => {
+    assert.equal(committedValue(plan), null);
+    assert.equal(committedValue({ ...plan, maxCycles: 12 }), 60_0000000n);
   });
 });

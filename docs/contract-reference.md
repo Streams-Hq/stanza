@@ -1,151 +1,184 @@
 # Contract reference
 
-The `stream` contract has a single responsibility: custody and linear accrual of
-a timed token deposit. It is one contract, written in Rust with
-`soroban-sdk` 28.x for target `wasm32v1-none`, and it is **immutable once
-deployed**.
+The `stanza-subscriptions` contract has one responsibility: publish billing
+plans and let anyone settle a due cycle by pulling a capped SEP-41 allowance.
+It is written with `soroban-sdk` 29 for target `wasm32v1-none` and is **immutable
+once deployed**.
 
-This page restates the public interface so the app team does not need to
-cross-reference the contracts repository. The authoritative version is
-[`docs/CONTRACT_SPEC.md`](https://github.com/Deyanju23/stellar-stream-contract/blob/main/docs/CONTRACT_SPEC.md).
+- Source: [`contracts/stanza/src/lib.rs`](https://github.com/stanza-labs/stanza/blob/main/contracts/stanza/src/lib.rs)
+- Live testnet contract: `CDGIYCP56ZAC5ZVTJVHJQ5H7OLZSCDU3DFA77VWXT74N47MW6ZBV4FDP`
 
 ## Storage
 
 | Key | Storage class | Meaning |
 | --- | --- | --- |
-| `Admin` | instance | The address set at initialization |
-| `NextStreamId` | instance | Monotonic counter for stream ids |
-| `Stream(u64)` | persistent | One `Stream` struct per id |
+| `NextPlanId`, `NextSubId` | instance | Monotonic id counters |
+| `Plan(u64)` | persistent | One `Plan` per id |
+| `Sub(u64)` | persistent | One `Subscription` per id |
+| `MerchantPlans(Address)` | persistent | Plan ids created by a merchant |
+| `SubscriberSubs(Address)` | persistent | Subscription ids owned by a subscriber |
+| `PlanSubs(u64)` | persistent | Subscription ids billed by a plan |
 
-Instance entries share the contract instance's TTL. Persistent entries carry
-their own TTL and are extended on every access.
+Persistent entries are extended on every read and write with a 30-day threshold
+and a 120-day extension, so an actively billed subscription is never archived
+mid-cycle.
 
 ## Errors
 
-All state-changing functions return `Result<T, StreamError>`.
+All state-changing functions return `Result<T, Error>`. Codes are stable ABI.
 
 | Code | Variant | Raised when |
 | --- | --- | --- |
-| 1 | `NotInitialized` | Admin read before `init` |
-| 2 | `AlreadyInitialized` | `init` called twice |
-| 3 | `Unauthorized` | Caller is neither recipient nor sender where required |
-| 4 | `StreamNotFound` | No `Stream` under the given id |
-| 5 | `StreamEnded` | Reserved |
-| 6 | `StreamCanceled` | Operation on an already-cancelled stream |
-| 7 | `InvalidTimeRange` | `start_time >= stop_time` |
-| 8 | `ZeroDeposit` | `deposit_amount <= 0` |
-| 9 | `AmountMismatch` | Reserved |
-| 10 | `WithdrawAmountTooHigh` | `amount > available` |
-| 11 | `NotCancelable` | `cancel` on a stream with `cancelable = false` |
-| 12 | `MathOverflow` | Any checked arithmetic overflows |
-
-Codes are stable and part of the ABI.
+| 1 | `PlanNotFound` | No plan under that id |
+| 2 | `SubNotFound` | No subscription under that id |
+| 3 | `InvalidAmount` | `amount <= 0` at plan creation |
+| 4 | `InvalidPeriod` | `period == 0` at plan creation |
+| 5 | `PlanInactive` | Plan is retired |
+| 6 | `SubNotActive` | Operation needs `Active`/`Paused` and the state differs |
+| 7 | `NotDue` | `now < next_charge_at` |
+| 8 | `CycleLimitReached` | `max_cycles` already reached |
+| 9 | `MathOverflow` | Checked arithmetic overflowed |
+| 10 | `NotSubscriber` | Reserved |
 
 ## Events
 
-Every state-changing function emits exactly one event.
+Every state change emits exactly one event. The first topic is the event name;
+the second is the affected id. The body is a typed struct.
 
-| Event | Fields | Emitted by |
+| Topic | Body | Emitted by |
 | --- | --- | --- |
-| `StreamCreated` | `sender, recipient, stream_id, token, deposit_amount, start_time, stop_time` | `create_stream` |
-| `TokensWithdrawn` | `recipient, stream_id, amount, remaining_balance` | `withdraw` |
-| `StreamCanceled` | `stream_id, sender_refund, recipient_payout` | `cancel` |
+| `plan_new` | `PlanCreated { plan_id, merchant, token, amount, period, trial_period, max_cycles }` | `create_plan` |
+| `sub_new` | `Subscribed { sub_id, plan_id, subscriber, next_charge_at }` | `subscribe` |
+| `charged` | `Charged { sub_id, plan_id, subscriber, merchant, amount, cycles_charged, next_charge_at, total_paid }` | `charge` |
+| `paused` / `resumed` / `canceled` | `SubscriptionStatusChanged { sub_id, plan_id, subscriber, status, next_charge_at }` | `pause` / `resume` / `cancel` |
+| `plan_act` | `PlanStatusChanged { plan_id, merchant, active }` | `set_plan_active` |
 
 ## Functions
 
-### `init(admin: Address) -> Result<(), StreamError>`
-
-- **Auth:** `admin.require_auth()`.
-- **Effect:** stores `Admin`, sets `NextStreamId = 0`. Fails with
-  `AlreadyInitialized` if admin is already set.
-- **Events:** none. **Called once** after deployment.
-
-### `create_stream(...) -> Result<u64, StreamError>`
+### `create_plan`
 
 ```rust
-create_stream(
-    sender: Address,
-    recipient: Address,
-    token_addr: Address,
-    deposit_amount: i128,
-    start_time: u64,
-    stop_time: u64,
-    cancelable: bool,
-) -> u64
+create_plan(
+    merchant: Address,
+    token: Address,
+    amount: i128,
+    period: u64,
+    trial_period: u64,
+    max_cycles: u32,
+) -> Result<u64, Error>
 ```
 
-- **Auth:** `sender.require_auth()`.
-- **Validation:** `deposit_amount > 0` (else `ZeroDeposit`);
-  `start_time < stop_time` (else `InvalidTimeRange`).
-- **Effect:** transfers the deposit from `sender` to the contract, assigns the
-  next id, stores the `Stream`, increments `NextStreamId`. Returns the new id.
-- **Events:** `StreamCreated`.
-- **Notes:** `start_time` may be in the past, so retroactive vesting is allowed.
+- **Auth:** `merchant.require_auth()`.
+- **Validates:** `amount > 0` (else `InvalidAmount`), `period > 0` (else `InvalidPeriod`).
+- **Effect:** assigns the next plan id, stores the plan with `active = true`,
+  indexes it under the merchant. No tokens move.
+- **Emits:** `plan_new`.
+- **Notes:** `max_cycles = 0` means uncapped.
 
-### `balance_of(stream_id: u64, target: Address) -> Result<i128, StreamError>`
+### `set_plan_active`
 
-- **Auth:** none — read-only.
-- **Returns:** for `recipient`, `earned - recipient_withdrawn`; for `sender`,
-  `deposit_amount - earned`. Any other address returns `Unauthorized`.
-- **Failure:** `StreamNotFound`; `StreamCanceled` if the stream was cancelled.
-- **Side effect:** extends the persistent TTL of the stream entry.
-
-### `get_stream(stream_id: u64) -> Result<Stream, StreamError>`
-
-- **Auth:** none.
-- **Returns:** the full `Stream` struct. Extends the persistent TTL.
-
-### `withdraw(stream_id: u64, amount: i128) -> Result<(), StreamError>`
-
-- **Auth:** `recipient.require_auth()`.
-- **Validation:** `amount <= earned - recipient_withdrawn` (else
-  `WithdrawAmountTooHigh`); `StreamCanceled` if already cancelled;
-  `StreamNotFound` if missing.
-- **Effect:** increments `recipient_withdrawn`, decrements `remaining_balance`,
-  transfers `amount` from the contract to the recipient. State is written before
-  the transfer (checks-effects-interactions).
-- **Events:** `TokensWithdrawn`.
-
-### `cancel(stream_id: u64) -> Result<(), StreamError>`
-
-- **Auth:** `sender.require_auth()`.
-- **Validation:** `cancelable` must be `true` (else `NotCancelable`); not
-  already cancelled (else `StreamCanceled`).
-- **Effect:** computes `earned`, pays the recipient
-  `earned - recipient_withdrawn`, refunds the sender `deposit_amount - earned`,
-  sets `is_canceled = true` and `remaining_balance = 0`.
-- **Events:** `StreamCanceled`.
-
-## Calling the contract from the app
-
-The SDK builds and simulates these calls. You rarely hand-roll XDR:
-
-```ts
-import { StellarStreamClient } from '@stellar-stream/sdk';
-
-const client = new StellarStreamClient({
-  rpcUrl: 'https://soroban-testnet.stellar.org',
-  networkPassphrase: 'Test SDF Network ; September 2015',
-  contractId: process.env.STREAM_CONTRACT_ID!,
-});
-
-// Read
-const stream = await client.getStream(0n);
-const claimable = await client.balanceOf(0n, recipient);
-
-// Write (returns an unsigned, prepared transaction to sign and submit)
-const tx = await client.createStreamTx({ /* ... */ });
+```rust
+set_plan_active(plan_id: u64, active: bool) -> Result<(), Error>
 ```
 
-See the [SDK reference](developers/sdk.md) for every method.
+- **Auth:** the plan's merchant.
+- **Effect:** retirement is reversible; it stops new subscriptions and new
+  charges but never edits existing subscriptions or moves funds.
+- **Emits:** `plan_act`.
+
+### `subscribe`
+
+```rust
+subscribe(subscriber: Address, plan_id: u64) -> Result<u64, Error>
+```
+
+- **Auth:** `subscriber.require_auth()`.
+- **Validates:** plan exists and is active (else `PlanInactive`).
+- **Effect:** assigns the next subscription id, stores it with
+  `next_charge_at = now + trial_period` and `status = Active`, and indexes it by
+  subscriber and by plan.
+- **Emits:** `sub_new`.
+- **Notes:** this does not check the allowance. The first `charge` fails at the
+  token contract if the subscriber never approved the Stanza contract. The app
+  always runs `approve` first.
+
+### `charge`
+
+```rust
+charge(sub_id: u64) -> Result<(), Error>
+```
+
+- **Auth:** none — permissionless.
+- **Validates:** subscription is `Active`, plan is active, cap not reached, and
+  `now >= next_charge_at`.
+- **Effect:** state is written before the token call (checks-effects-interactions):
+  `cycles_charged += 1`, `total_paid += amount`, `next_charge_at += period`, and
+  `status = Completed` when the cap is reached. Then exactly one
+  `transfer_from(contract, subscriber, merchant, amount)` is executed.
+- **Emits:** `charged`.
+- **Failure:** if the allowance is missing or too small, the token contract
+  rejects the transfer and the whole charge reverts.
+
+### `pause` / `resume` / `cancel`
+
+```rust
+pause(sub_id: u64)  -> Result<(), Error>   // Active → Paused
+resume(sub_id: u64) -> Result<(), Error>   // Paused → Active
+cancel(sub_id: u64) -> Result<(), Error>   // Active|Paused → Canceled (terminal)
+```
+
+- **Auth:** the subscription's subscriber.
+- **Effect:** `resume` sets `next_charge_at = now + plan.period`, so paused time
+  is never billed. `cancel` is permanent and moves no funds.
+- **Emits:** `paused`, `resumed`, `canceled`.
+
+### Reads
+
+| Function | Returns |
+| --- | --- |
+| `get_plan(plan_id) -> Plan` | Full plan record |
+| `get_subscription(sub_id) -> Subscription` | Full subscription record |
+| `is_due(sub_id) -> bool` | Whether a charge would succeed now |
+| `cycles_due(sub_id) -> u32` | Billable cycles including backlog, capped by `max_cycles` |
+| `plan_count() -> u64` | Number of plans |
+| `subscription_count() -> u64` | Number of subscriptions |
+| `plans_of(merchant) -> Vec<u64>` | Plan ids by merchant |
+| `subs_of(subscriber) -> Vec<u64>` | Subscription ids by subscriber |
+| `subs_of_plan(plan_id) -> Vec<u64>` | Subscription ids by plan |
+
+Reads require no authorization and no funded account.
+
+## Calling it with the Stellar CLI
+
+```bash
+CONTRACT=CDGIYCP56ZAC5ZVTJVHJQ5H7OLZSCDU3DFA77VWXT74N47MW6ZBV4FDP
+XLM=CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC
+
+stellar contract invoke --id $CONTRACT --source alice --network testnet -- create_plan \
+  --merchant "$(stellar keys address alice)" \
+  --token $XLM \
+  --amount 10000000 \
+  --period 2592000 \
+  --trial_period 0 \
+  --max_cycles 12
+
+stellar contract invoke --id $XLM --source bob --network testnet -- approve \
+  --from "$(stellar keys address bob)" \
+  --spender $CONTRACT \
+  --amount 30000000 \
+  --expiration_ledger 5600000
+
+stellar contract invoke --id $CONTRACT --source bob --network testnet -- subscribe \
+  --subscriber "$(stellar keys address bob)" --plan_id 0
+
+stellar contract invoke --id $CONTRACT --source alice --network testnet -- charge --sub_id 0
+
+stellar contract invoke --id $CONTRACT --network testnet -- get_subscription --sub_id 0
+```
 
 ## Invariants
 
-1. `contract token balance >= Σ remaining_balance` over all live streams.
-2. For any live stream and timestamp,
-   `balance_of(recipient) + balance_of(sender) == deposit_amount`.
-3. `earned` is non-decreasing and equals `deposit_amount` at `stop_time` and
-   after.
-4. `recipient_withdrawn` never exceeds `earned`.
-5. After `cancel` or a full withdrawal, the contract holds 0 tokens for that
-   stream.
+The unit tests in [`src/test.rs`](https://github.com/stanza-labs/stanza/blob/main/contracts/stanza/src/test.rs)
+assert the invariants listed in [How billing works](protocol.md#invariants).
+The most important one for custody: **the contract's token balance is always
+zero**, because it never receives funds.

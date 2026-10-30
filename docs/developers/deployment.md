@@ -1,103 +1,136 @@
-# Deployment topology
+# Deployment
 
-The application layer is three pieces with very different hosting needs. Put
-each on a platform built for it rather than forcing all three onto one.
-
-## What runs where
+Three deployables, three different hosting models: the contract on Stellar
+testnet, the web app on Vercel, and the indexer on a host that keeps a process
+alive.
 
 ```mermaid
 flowchart LR
-  U["User<br/>(browser + Freighter)"] --> W["Next.js web app<br/>(static + edge/serverless)"]
-  W -->|"reads: streams, events"| I["Indexer REST API<br/>(long-running Node process)"]
-  I -->|"writes"| D[("SQLite file<br/>or Postgres")]
-  I -->|"polls getEvents"| R["Soroban RPC"]
-  W -->|"build, sign, submit writes"| R
-  R --> C["stream contract<br/>(Stellar testnet)"]
+  U["Browser + Freighter"] --> W["Next.js app<br/>(Vercel)"]
+  W -->|reads: plans, subs, due queue| I["Stanza indexer<br/>(long-running Node)"]
+  I --> D[("SQLite")]
+  I -->|polls getEvents| R["Soroban RPC"]
+  W -->|simulate reads| R
+  W -->|sign + submit writes| R
+  R --> C["stanza-subscriptions<br/>(Stellar testnet)"]
 ```
 
-Two paths leave the browser:
+## 1. Contract (required)
 
-- **Reads** go to the indexer's REST API so the dashboard can list streams
-  without scanning every id on-chain.
-- **Writes** (`create_stream`, `withdraw`, `cancel`) go straight to Soroban
-  RPC, signed in Freighter. They do not pass through the indexer.
+The contract must exist before the app can do anything.
 
-The indexer later observes those same writes as events and caches them.
+### Option A — Stellar CLI
 
-## Frontend (`apps/web`)
+```bash
+rustup target add wasm32v1-none
+pnpm contract:build
 
-A standard Next.js app. A platform purpose-built for Next.js (Vercel) is the
-default choice. Requirements:
+stellar keys generate stanza-deployer --network testnet --fund
+stellar contract deploy \
+  --wasm contracts/stanza/target/wasm32v1-none/release/stanza_subscriptions.wasm \
+  --source stanza-deployer \
+  --network testnet
+```
 
-- **Root directory:** `apps/web` (or the repo root if the platform detects the
-  pnpm workspace).
-- **Build command:** `pnpm build` (or `pnpm --filter web build`).
-- **Output:** managed by Next.js.
-- **Environment:** the `NEXT_PUBLIC_*` values from
-  [Environment variables](environment.md).
+The command prints `C…`. There is no `init` step: the contract is usable
+immediately.
 
-!!! warning "`NEXT_PUBLIC_*` is inlined at build time"
-    Next.js bakes these values into the bundle during `next build`. Setting them
-    only at runtime has no effect — set them in the platform's environment, then
-    **redeploy**. This is the usual cause of an app that still calls
-    `localhost:3001` in production.
+### Option B — script
 
-## Indexer (`indexer`)
+```bash
+STELLAR_SECRET=S... pnpm deploy:testnet
+```
 
-A long-running Node process with a database, not a serverless function. Use a
-platform that keeps a process alive (Render, Fly.io, Railway). Requirements:
+Without `STELLAR_SECRET` the script generates and funds a throwaway testnet
+keypair, then writes `deployments/testnet.json`.
 
-- **Root directory:** `indexer`.
-- **Build command:** `pnpm install && pnpm --filter indexer build` (or
-  `pnpm build` at the root).
-- **Start command:** `pnpm --filter indexer start` → `node dist/server.js`.
-- **Health check:** `GET /health` returns the current `lastLedger`, so the
-  platform can confirm it is syncing and not just listening.
-- **Environment:** `STREAM_CONTRACT_ID`, `SOROBAN_RPC_URL`,
-  `STELLAR_NETWORK_PASSPHRASE`, and `DB_PATH` (or a database URL).
-- **Persistent disk:** the SQLite file must survive restarts, or the index is
-  rebuilt from the start ledger each time. Attach a disk, or move to Postgres
-  (tracked as an issue).
+### After deploying
 
-Once deployed, set the frontend's `NEXT_PUBLIC_INDEXER_URL` to the indexer's
-public URL and redeploy the frontend.
+1. Put the id in `apps/web/.env.local` (`NEXT_PUBLIC_STANZA_CONTRACT_ID`) and
+   `indexer/.env` (`STANZA_CONTRACT_ID`).
+2. Commit `deployments/testnet.json` so contributors and the docs point at the
+   same contract.
+3. Smoke-test:
 
-## Database
+```bash
+stellar contract invoke --id $CONTRACT --network testnet -- plan_count
+```
 
-SQLite is fine for the indexer co-located on a host with a persistent disk. A
-managed Postgres is the durable alternative for stateless hosts. Whichever you
-choose, keep it in the **same region** as the indexer so reads are not
-round-tripping across continents.
+## 2. Web app on Vercel
 
-## Wiring it together
+The app is a standard Next.js 14 monorepo package. [`vercel.json`](https://github.com/stanza-labs/stanza/blob/main/vercel.json)
+already sets the build command and output directory.
 
-The single value that must agree across services is the **stream contract id**:
+1. Push the repo, then **Add New → Project** in Vercel and import it.
+2. **Root Directory:** leave it at the repository root. The root `vercel.json`
+   builds the SDK first and then the web app.
+3. **Framework preset:** Next.js (detected).
+4. Add the environment variables below for **Production** and **Preview**:
 
-| Service | Variable |
+   | Variable | Value |
+   | --- | --- |
+   | `NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE` | `Test SDF Network ; September 2015` |
+   | `NEXT_PUBLIC_SOROBAN_RPC_URL` | `https://soroban-testnet.stellar.org` |
+   | `NEXT_PUBLIC_STANZA_CONTRACT_ID` | your `C…` contract id |
+   | `NEXT_PUBLIC_INDEXER_URL` | public URL of the deployed indexer |
+   | `NEXT_PUBLIC_DEFAULT_TOKEN_ADDRESS` | XLM SAC address |
+   | `NEXT_PUBLIC_TOKEN_DECIMALS` | `7` |
+   | `NEXT_PUBLIC_EXPLORER_BASE` | `https://stellar.expert/explorer/testnet` |
+
+5. Deploy. Vercel runs `pnpm install --frozen-lockfile`, builds
+   `@stanza/sdk`, then builds `web`.
+6. **Redeploy after any `NEXT_PUBLIC_*` change.** Next.js inlines them at build
+   time; changing a value without a build leaves the old value in the bundle.
+
+!!! note "Vercel is optional but recommended"
+    The web app also runs on any Node host (`pnpm --filter web start`) or as a
+    static export target. Vercel is the least-configuration option because it
+    understands Next.js output.
+
+The app degrades gracefully without an indexer: plan and subscription reads fall
+back to Soroban RPC simulations, and only the curated "Explore" list shrinks to
+the most recent 24 plans.
+
+## 3. Indexer (optional for reads, required for cached lists)
+
+A long-running Node process with a SQLite file — **not** a Vercel serverless
+function.
+
+| Setting | Value |
 | --- | --- |
-| Frontend | `NEXT_PUBLIC_STREAM_CONTRACT_ID` |
-| Indexer | `STREAM_CONTRACT_ID` |
+| Root directory | `indexer` (or repo root with a filter) |
+| Install | `pnpm install --frozen-lockfile` |
+| Build | `pnpm --filter @stanza/indexer build` |
+| Start | `node dist/server.js` |
+| Health check | `GET /health` (includes `lastLedger`) |
+| Persistent disk | mount for `DB_PATH` (e.g. `/data/stanza.sqlite`) |
+| Env | `STANZA_CONTRACT_ID`, `SOROBAN_RPC_URL`, `STELLAR_NETWORK_PASSPHRASE`, `DB_PATH` |
 
-Both must also target the **same network** (`SOROBAN_RPC_URL` and
-`STELLAR_NETWORK_PASSPHRASE`). A frontend on testnet talking to an indexer
-configured for a different contract will show an empty or wrong list; a
-frontend signing for a different network than Freighter is set to will fail at
-submission.
+Without a persistent disk the index rebuilds from `START_LEDGER` on every
+restart. With the cursor stored in the `meta` table, restarts resume exactly
+where they stopped.
 
-## Common failure: the frontend still calls localhost
+## Wiring checklist
 
-If the deployed app cannot reach the indexer:
+| Value | Must match across |
+| --- | --- |
+| Contract id | `NEXT_PUBLIC_STANZA_CONTRACT_ID` (web) = `STANZA_CONTRACT_ID` (indexer) = `deployments/testnet.json` |
+| Network | `NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE` = indexer passphrase = Freighter's selected network |
+| Indexer URL | `NEXT_PUBLIC_INDEXER_URL` = public HTTPS URL of the indexer service |
 
-1. Confirm `NEXT_PUBLIC_INDEXER_URL` is set in the **hosting platform**, not
-   just locally.
-2. Confirm the value is the indexer's public HTTPS URL, and that the indexer
-   allows the frontend's origin (it enables CORS for all origins by default).
-3. **Redeploy the frontend.** Changing a `NEXT_PUBLIC_*` value without a rebuild
-   leaves the old value inlined in the bundle.
+## Post-deployment verification
 
-## Deploying the contract first
+1. `GET /health` returns `{ "status": "ok", "lastLedger": > 0 }`.
+2. `GET /api/plans` includes the demo plan (or your plan).
+3. Open the web app, connect Freighter on testnet, and load `/plans/0`.
+4. Publish a plan, subscribe with an allowance, and charge one cycle.
+5. Confirm the `charged` event on Stellar.Expert and that the merchant balance
+   increased by exactly one cycle price.
 
-The contract must be deployed before the app can do anything on-chain. See the
-contracts repo's
-[deployment guide](https://github.com/Deyanju23/stellar-stream-contract/blob/main/docs/DEPLOYMENT.md);
-it prints `STREAM_CONTRACT_ID`, which fills in the table above.
+## Costs
+
+- **Contract:** one upload + one create transaction on testnet (free testnet
+  XLM), plus rent pre-paid in the contract's TTL extensions.
+- **Vercel:** hobby tier is enough; the app is static + client-side RPC calls.
+- **Indexer:** the smallest always-on instance with a 1 GB disk.
+- **Per charge:** one Stellar network fee, a fraction of a cent.

@@ -1,16 +1,24 @@
 {
-  "name": "stellar-stream-app",
+  "name": "stanza",
   "version": "0.1.0",
   "private": true,
-  "description": "Continuous linear money-streaming protocol monorepo on Stellar Soroban",
+  "description": "Stanza — non-custodial recurring subscriptions on Stellar Soroban",
+  "license": "MIT",
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
-    "clean": "turbo run clean && rm -rf node_modules"
+    "clean": "turbo run clean && rm -rf node_modules",
+    "contract:build": "cd contracts/stanza && cargo build --target wasm32v1-none --release",
+    "contract:test": "cd contracts/stanza && cargo test",
+    "contract:fmt": "cd contracts/stanza && cargo fmt --check",
+    "deploy:testnet": "node scripts/deploy-testnet.mjs",
+    "docs:serve": "mkdocs serve",
+    "docs:build": "mkdocs build --strict"
   },
   "devDependencies": {
+    "@stellar/stellar-sdk": "^17.4.0",
     "turbo": "^2.4.4",
     "typescript": "^5.7.3"
   },

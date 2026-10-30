@@ -1,8 +1,9 @@
 {
-  "name": "indexer",
+  "name": "@stanza/indexer",
   "version": "0.1.0",
-  "description": "StellarStream Soroban event indexing and REST API server",
+  "description": "Stanza Soroban event indexer and REST API",
   "private": true,
+  "license": "MIT",
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
@@ -11,9 +12,9 @@
     "clean": "rm -rf dist *.sqlite *.db"
   },
   "dependencies": {
-    "@stellar-stream/sdk": "workspace:*",
-    "@stellar/stellar-sdk": "^13.0.0",
-    "better-sqlite3": "^11.8.1",
+    "@stanza/sdk": "workspace:*",
+    "@stellar/stellar-sdk": "^17.4.0",
+    "better-sqlite3": "^13.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2"
@@ -23,6 +24,7 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^20.17.19",
+    "node-gyp": "^11.0.0",
     "tsx": "^4.19.3",
     "typescript": "^5.7.3"
   }

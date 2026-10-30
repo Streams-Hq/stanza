@@ -10,19 +10,44 @@ env:
   CI: true
 
 jobs:
-  check-and-build:
-    name: Lint, Test & Build Monorepo
+  contract:
+    name: Soroban contract (fmt, test, wasm)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+          components: rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/stanza
+
+      - name: Format check
+        run: cargo fmt --manifest-path contracts/stanza/Cargo.toml --check
+
+      - name: Contract unit tests
+        run: cargo test --manifest-path contracts/stanza/Cargo.toml
+
+      - name: Build wasm
+        run: cargo build --manifest-path contracts/stanza/Cargo.toml --target wasm32v1-none --release
+
+  app:
+    name: SDK, indexer and web app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10.30.1
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20.x
@@ -31,31 +56,28 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run SDK unit tests
-        run: pnpm --filter @stellar-stream/sdk test
+      - name: SDK tests
+        run: pnpm --filter @stanza/sdk test
 
       - name: Build SDK
-        run: pnpm --filter @stellar-stream/sdk build
+        run: pnpm --filter @stanza/sdk build
 
-      - name: Build Indexer
-        run: pnpm --filter indexer build
+      - name: Build indexer
+        run: pnpm --filter @stanza/indexer build
 
-      - name: Build Web Application
+      - name: Build web app
         run: pnpm --filter web build
         env:
-          NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
-          NEXT_PUBLIC_SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org"
-          # Populated from the contracts repo's deploy output. The build does not
-          # need a live contract id; runtime reads fall back to on-chain queries.
-          NEXT_PUBLIC_STREAM_CONTRACT_ID: ""
-          NEXT_PUBLIC_INDEXER_URL: "http://localhost:3001"
+          NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE: 'Test SDF Network ; September 2015'
+          NEXT_PUBLIC_SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org'
+          NEXT_PUBLIC_STANZA_CONTRACT_ID: ''
+          NEXT_PUBLIC_INDEXER_URL: 'http://localhost:3001'
 
   docs:
-    name: Build documentation
+    name: Documentation build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5

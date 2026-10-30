@@ -1,83 +1,140 @@
 /**
- * Core domain types and interfaces for the StellarStream Soroban smart contract.
+ * Domain types for the Stanza subscriptions contract.
+ *
+ * Amounts are always integer base units (`bigint`), never floats.
  */
 
-export interface Stream {
+export interface Plan {
   id: bigint;
-  sender: string;
-  recipient: string;
+  merchant: string;
   token: string;
-  depositAmount: bigint;
-  startTime: bigint;
-  stopTime: bigint;
-  ratePerSecond: bigint;
-  remainingBalance: bigint;
-  recipientWithdrawn: bigint;
-  isCanceled: boolean;
-  cancelable: boolean;
-}
-
-export interface CreateStreamParams {
-  sender: string;
-  recipient: string;
-  token: string;
-  depositAmount: bigint;
-  startTime: bigint;
-  stopTime: bigint;
-  cancelable: boolean;
-}
-
-export interface WithdrawParams {
-  streamId: bigint;
+  /** Price per cycle, in token base units. */
   amount: bigint;
-  recipient: string;
+  /** Cycle length in seconds. */
+  period: bigint;
+  /** Seconds billed at zero cost before the first charge. */
+  trialPeriod: bigint;
+  /** Hard cap on paid cycles. `0` means unlimited. */
+  maxCycles: number;
+  active: boolean;
 }
 
-export interface CancelParams {
-  streamId: bigint;
-  sender: string;
-}
+export type SubStatus = 'active' | 'paused' | 'canceled' | 'completed';
 
-export interface LiveBalance {
-  recipientEarned: bigint;
-  recipientClaimable: bigint;
-  senderRefundable: bigint;
-  progressFraction: number;
+export interface Subscription {
+  id: bigint;
+  planId: bigint;
+  subscriber: string;
+  startedAt: bigint;
+  nextChargeAt: bigint;
+  cyclesCharged: number;
+  totalPaid: bigint;
+  status: SubStatus;
 }
-
-export interface StreamCreatedEvent {
-  sender: string;
-  recipient: string;
-  streamId: bigint;
-  token: string;
-  depositAmount: bigint;
-  startTime: bigint;
-  stopTime: bigint;
-  ledger?: number;
-}
-
-export interface TokensWithdrawnEvent {
-  recipient: string;
-  streamId: bigint;
-  amount: bigint;
-  remainingBalance: bigint;
-  ledger?: number;
-}
-
-export interface StreamCanceledEvent {
-  streamId: bigint;
-  senderRefund: bigint;
-  recipientPayout: bigint;
-  ledger?: number;
-}
-
-export type StreamEvent =
-  | { type: 'StreamCreated'; data: StreamCreatedEvent }
-  | { type: 'TokensWithdrawn'; data: TokensWithdrawnEvent }
-  | { type: 'StreamCanceled'; data: StreamCanceledEvent };
 
 export interface ClientConfig {
   rpcUrl: string;
   networkPassphrase: string;
   contractId: string;
 }
+
+export interface CreatePlanParams {
+  merchant: string;
+  token: string;
+  amount: bigint;
+  period: bigint;
+  trialPeriod?: bigint;
+  maxCycles?: number;
+}
+
+export interface SubscribeParams {
+  subscriber: string;
+  planId: bigint;
+}
+
+export interface ChargeParams {
+  subscriptionId: bigint;
+}
+
+export interface SubscriptionActionParams {
+  subscriptionId: bigint;
+  /** Address that must sign the action (the subscriber). */
+  subscriber: string;
+}
+
+export interface SetPlanActiveParams {
+  planId: bigint;
+  merchant: string;
+  active: boolean;
+}
+
+export interface ApproveAllowanceParams {
+  token: string;
+  /** Token owner granting the allowance (the subscriber). */
+  owner: string;
+  /** Spender granted the allowance (the Stanza contract). */
+  spender: string;
+  amount: bigint;
+  /** Ledger sequence after which the allowance expires. */
+  expirationLedger: number;
+}
+
+export interface PlanCreatedEvent {
+  planId: bigint;
+  merchant: string;
+  token: string;
+  amount: bigint;
+  period: bigint;
+  trialPeriod: bigint;
+  maxCycles: number;
+}
+
+export interface SubscribedEvent {
+  subId: bigint;
+  planId: bigint;
+  subscriber: string;
+  nextChargeAt: bigint;
+}
+
+export interface ChargedEvent {
+  subId: bigint;
+  planId: bigint;
+  subscriber: string;
+  merchant: string;
+  amount: bigint;
+  cyclesCharged: number;
+  nextChargeAt: bigint;
+  totalPaid: bigint;
+}
+
+export interface SubscriptionStatusChangedEvent {
+  subId: bigint;
+  planId: bigint;
+  subscriber: string;
+  status: SubStatus;
+  nextChargeAt: bigint;
+}
+
+export interface PlanStatusChangedEvent {
+  planId: bigint;
+  merchant: string;
+  active: boolean;
+}
+
+export type StanzaEvent =
+  | { kind: 'plan_created'; data: PlanCreatedEvent }
+  | { kind: 'subscribed'; data: SubscribedEvent }
+  | { kind: 'charged'; data: ChargedEvent }
+  | { kind: 'subscription_updated'; data: SubscriptionStatusChangedEvent }
+  | { kind: 'plan_status_changed'; data: PlanStatusChangedEvent };
+
+/** Event name on-chain → the kind the SDK exposes. */
+export const EVENT_TOPIC_TO_KIND: Record<string, StanzaEvent['kind']> = {
+  plan_new: 'plan_created',
+  sub_new: 'subscribed',
+  charged: 'charged',
+  paused: 'subscription_updated',
+  resumed: 'subscription_updated',
+  canceled: 'subscription_updated',
+  plan_act: 'plan_status_changed',
+};

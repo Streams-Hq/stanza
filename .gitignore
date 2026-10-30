@@ -14,6 +14,11 @@ build/
 .turbo/
 *.tsbuildinfo
 
+# Rust / Soroban build artifacts
+contracts/**/target/
+*.wasm
+Cargo.lock.bak
+
 # Documentation build output
 site/
 .venv/
@@ -38,6 +43,9 @@ pnpm-debug.log*
 *.sqlite3-journal
 *.db
 *.db-journal
+
+# Local deployment records (keep deployments/*.json committed, but not secrets)
+.env.contract
 
 # OS & Editor
 .DS_Store

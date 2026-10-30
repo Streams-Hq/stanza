@@ -2,3 +2,9 @@ packages:
   - 'packages/*'
   - 'apps/*'
   - 'indexer'
+
+# pnpm 10 blocks lifecycle scripts by default. The indexer needs the native
+# SQLite binding compiled, and esbuild needs its postinstall.
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild

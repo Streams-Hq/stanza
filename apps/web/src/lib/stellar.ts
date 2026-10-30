@@ -1,16 +1,12 @@
-import {
-  rpc,
-  StrKey,
-  TransactionBuilder,
-} from '@stellar/stellar-sdk';
-import { StellarStreamClient } from '@stellar-stream/sdk';
+import { StrKey, TransactionBuilder } from '@stellar/stellar-sdk';
+import { StanzaClient } from '@stanza/sdk';
 import { CONFIG } from './config';
 
-let clientInstance: StellarStreamClient | null = null;
+let clientInstance: StanzaClient | null = null;
 
-export function getStreamClient(): StellarStreamClient {
+export function getStanzaClient(): StanzaClient {
   if (!clientInstance) {
-    clientInstance = new StellarStreamClient({
+    clientInstance = new StanzaClient({
       rpcUrl: CONFIG.rpcUrl,
       networkPassphrase: CONFIG.networkPassphrase,
       contractId: CONFIG.contractId,
@@ -20,73 +16,44 @@ export function getStreamClient(): StellarStreamClient {
 }
 
 export function isValidStellarAddress(address: string): boolean {
-  if (!address) return false;
-  return StrKey.isValidEd25519PublicKey(address);
+  return Boolean(address) && StrKey.isValidEd25519PublicKey(address);
 }
 
 export function isValidContractAddress(address: string): boolean {
-  if (!address) return false;
-  return StrKey.isValidContract(address) || StrKey.isValidEd25519PublicKey(address);
+  return Boolean(address) && StrKey.isValidContract(address);
 }
 
-/**
- * Submits a signed transaction XDR to the Soroban RPC server and polls until finalized.
- */
+/** Polls Soroban RPC until the submitted transaction is final. */
 export async function submitSignedTransaction(
   signedTxXdr: string,
-): Promise<{ hash: string; status: string; streamId?: bigint }> {
-  const client = getStreamClient();
-  const tx = TransactionBuilder.fromXDR(
-    signedTxXdr,
-    CONFIG.networkPassphrase,
-  );
+): Promise<{ hash: string; status: string }> {
+  const client = getStanzaClient();
+  const tx = TransactionBuilder.fromXDR(signedTxXdr, CONFIG.networkPassphrase);
+  const send = await client.server.sendTransaction(tx);
 
-  const sendResponse = await client.server.sendTransaction(tx);
-
-  if (sendResponse.status === 'ERROR') {
-    const errorDetails =
-      'errorResult' in sendResponse ? JSON.stringify(sendResponse.errorResult) : '';
-    throw new Error(`Transaction submission error: ${sendResponse.status} ${errorDetails}`);
+  if (send.status === 'ERROR') {
+    throw new Error(
+      `Submission failed: ${'errorResult' in send ? JSON.stringify(send.errorResult) : send.status}`,
+    );
   }
 
-  const txHash = sendResponse.hash;
-
-  // Poll for completion (up to 30 seconds)
-  const maxAttempts = 15;
-  for (let i = 0; i < maxAttempts; i++) {
+  for (let attempt = 0; attempt < 15; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
+    const result = await client.server.getTransaction(send.hash);
 
-    const statusResponse = await client.server.getTransaction(txHash);
-
-    if (statusResponse.status === 'SUCCESS') {
-      let streamId: bigint | undefined;
-
-      // Try parsing returned stream ID from returnValue if available
-      if (statusResponse.resultMetaXdr) {
-        try {
-          if (statusResponse.returnValue) {
-            const native = statusResponse.returnValue.value();
-            if (typeof native === 'bigint') streamId = native;
-            else if (typeof native === 'number') streamId = BigInt(native);
-          }
-        } catch {
-          // ignore return value extraction if not present
-        }
-      }
-
-      return {
-        hash: txHash,
-        status: 'SUCCESS',
-        streamId,
-      };
+    if (result.status === 'SUCCESS') {
+      return { hash: send.hash, status: 'SUCCESS' };
     }
-
-    if (statusResponse.status === 'FAILED') {
-      throw new Error(
-        `Transaction failed on-chain. Details: ${JSON.stringify(statusResponse.resultXdr || '')}`,
-      );
+    if (result.status === 'FAILED') {
+      throw new Error(`Transaction failed on-chain (${send.hash})`);
     }
   }
 
-  throw new Error(`Transaction confirmation timed out after 30s. Hash: ${txHash}`);
+  throw new Error(`Timed out waiting for ${send.hash}`);
 }
+
+export const explorerTx = (hash: string): string =>
+  `${CONFIG.explorerBase}/tx/${hash}`;
+
+export const explorerContract = (id: string): string =>
+  `${CONFIG.explorerBase}/contract/${id}`;

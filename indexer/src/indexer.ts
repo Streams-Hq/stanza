@@ -1,12 +1,16 @@
-import { rpc, scValToNative, xdr } from '@stellar/stellar-sdk';
+import { rpc, scValToNative } from '@stellar/stellar-sdk';
+import { parseStanzaEvent } from '@stanza/sdk';
 import dotenv from 'dotenv';
 import {
   getLastLedger,
-  insertEvent,
-  recordCancellation,
-  recordWithdrawal,
+  recordCharge,
+  recordEvent,
   setLastLedger,
-  upsertStream,
+  setPlanActive,
+  upsertPlan,
+  upsertSubscription,
+  getSubscriptionById,
+  getPlanById,
 } from './db.js';
 
 dotenv.config();
@@ -17,7 +21,12 @@ export interface IndexerConfig {
   pollIntervalMs?: number;
 }
 
-export class StreamIndexer {
+/**
+ * Follows the Stanza contract's events and keeps the SQLite read model in sync.
+ * The chain is always authoritative; this service is a cache that makes the
+ * dashboard and the keeper view fast.
+ */
+export class StanzaIndexer {
   private server: rpc.Server;
   private contractId: string;
   private pollIntervalMs: number;
@@ -29,10 +38,8 @@ export class StreamIndexer {
       config?.rpcUrl ||
       process.env.SOROBAN_RPC_URL ||
       'https://soroban-testnet.stellar.org';
-    this.contractId =
-      config?.contractId || process.env.STREAM_CONTRACT_ID || '';
-    this.pollIntervalMs = config?.pollIntervalMs || 3000;
-
+    this.contractId = config?.contractId || process.env.STANZA_CONTRACT_ID || '';
+    this.pollIntervalMs = config?.pollIntervalMs ?? 3000;
     this.server = new rpc.Server(rpcUrl, {
       allowHttp: rpcUrl.startsWith('http://'),
     });
@@ -43,26 +50,20 @@ export class StreamIndexer {
     this.isRunning = true;
 
     console.log(
-      `[Indexer] Initialized for contract: ${this.contractId || '(not configured, waiting for contract ID)'}`,
+      `[Indexer] Watching ${this.contractId || '(waiting for STANZA_CONTRACT_ID)'}`,
     );
 
-    let startLedger = getLastLedger();
-    if (startLedger === 0) {
+    let cursor = getLastLedger();
+    if (cursor === 0) {
       try {
         const latest = await this.server.getLatestLedger();
-        startLedger = Math.max(1, latest.sequence - 100);
-        setLastLedger(startLedger);
-        console.log(`[Indexer] Starting sync from ledger: ${startLedger}`);
-      } catch (err) {
-        console.warn(
-          `[Indexer] Could not fetch latest ledger, starting at ledger 1:`,
-          err,
-        );
-        startLedger = 1;
+        cursor = Math.max(1, latest.sequence - 100);
+        setLastLedger(cursor);
+      } catch {
+        cursor = 1;
       }
-    } else {
-      console.log(`[Indexer] Resuming sync from saved ledger: ${startLedger}`);
     }
+    console.log(`[Indexer] Starting at ledger ${cursor}`);
 
     this.poll();
   }
@@ -73,7 +74,12 @@ export class StreamIndexer {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    console.log('[Indexer] Polling stopped');
+    console.log('[Indexer] Stopped');
+  }
+
+  private schedule(delay: number): void {
+    if (!this.isRunning) return;
+    this.timer = setTimeout(() => void this.poll(), delay);
   }
 
   private async poll(): Promise<void> {
@@ -81,203 +87,164 @@ export class StreamIndexer {
 
     try {
       if (!this.contractId) {
-        // If contract ID is not configured yet, wait and re-check env
-        this.contractId = process.env.STREAM_CONTRACT_ID || '';
-        this.scheduleNext(this.pollIntervalMs);
-        return;
+        this.contractId = process.env.STANZA_CONTRACT_ID || '';
+        return this.schedule(this.pollIntervalMs);
       }
 
-      const currentCursor = getLastLedger();
+      const cursor = getLastLedger();
       const response = await this.server.getEvents({
-        startLedger: currentCursor,
-        filters: [
-          {
-            type: 'contract',
-            contractIds: [this.contractId],
-          },
-        ],
+        startLedger: cursor,
+        filters: [{ type: 'contract', contractIds: [this.contractId] }],
         limit: 100,
       });
 
-      if (response.events && response.events.length > 0) {
-        let maxLedger = currentCursor;
-
-        for (const rawEvent of response.events) {
-          try {
-            await this.processEvent(rawEvent);
-            if (rawEvent.ledger > maxLedger) {
-              maxLedger = rawEvent.ledger;
-            }
-          } catch (err) {
-            console.error(`[Indexer] Error processing event ${rawEvent.id}:`, err);
-          }
+      let maxLedger = cursor;
+      for (const event of response.events) {
+        try {
+          this.processEvent(event);
+          maxLedger = Math.max(maxLedger, event.ledger);
+        } catch (err) {
+          console.error(`[Indexer] Failed to process ${event.id}:`, err);
         }
+      }
 
-        // Set last ledger to the next ledger to fetch
+      if (response.events.length > 0) {
         setLastLedger(maxLedger + 1);
       } else {
-        // Update to latest ledger if no events
-        try {
-          const latest = await this.server.getLatestLedger();
-          if (latest.sequence > currentCursor + 100) {
-            setLastLedger(latest.sequence - 10);
-          }
-        } catch {
-          // ignore ledger fetch errors in idle state
+        const latest = await this.server.getLatestLedger().catch(() => null);
+        if (latest && latest.sequence > cursor + 100) {
+          setLastLedger(latest.sequence - 10);
         }
       }
     } catch (err) {
-      console.error('[Indexer] Polling error:', err);
+      console.error('[Indexer] Poll error:', err);
     }
 
-    this.scheduleNext(this.pollIntervalMs);
+    this.schedule(this.pollIntervalMs);
   }
 
-  private scheduleNext(delay: number): void {
-    if (!this.isRunning) return;
-    this.timer = setTimeout(() => {
-      this.poll();
-    }, delay);
-  }
+  private processEvent(event: rpc.Api.EventResponse): void {
+    const topics = event.topic.map((t) => scValToNative(t));
+    const name = String(topics[0] ?? '');
+    const value = scValToNative(event.value);
+    const parsed = parseStanzaEvent(name, value);
+    if (!parsed) return;
 
-  private async processEvent(event: rpc.Api.EventResponse): Promise<void> {
-    // Decode topics
-    const decodedTopics: unknown[] = [];
-    for (const t of event.topic) {
-      try {
-        if (typeof t === 'string') {
-          const scVal = xdr.ScVal.fromXDR(t, 'base64');
-          decodedTopics.push(scValToNative(scVal));
-        } else {
-          decodedTopics.push(scValToNative(t));
-        }
-      } catch {
-        decodedTopics.push(t);
+    const now = Math.floor(Date.now() / 1000);
+
+    switch (parsed.kind) {
+      case 'plan_created': {
+        const plan = parsed.data;
+        upsertPlan({
+          id: Number(plan.planId),
+          merchant: plan.merchant,
+          token: plan.token,
+          amount: plan.amount.toString(),
+          period: Number(plan.period),
+          trial_period: Number(plan.trialPeriod),
+          max_cycles: plan.maxCycles,
+          active: 1,
+          created_at: now,
+        });
+        console.log(`[Indexer] Plan #${plan.planId} created`);
+        break;
+      }
+      case 'subscribed': {
+        const sub = parsed.data;
+        upsertSubscription({
+          id: Number(sub.subId),
+          plan_id: Number(sub.planId),
+          subscriber: sub.subscriber,
+          started_at: now,
+          next_charge_at: Number(sub.nextChargeAt),
+          cycles_charged: 0,
+          total_paid: '0',
+          status: 'active',
+          created_at: now,
+        });
+        recordEvent(
+          Number(sub.subId),
+          'subscribed',
+          event.ledger,
+          parsed.data,
+          event.ledgerClosedAt,
+          event.txHash,
+        );
+        console.log(`[Indexer] Subscription #${sub.subId} created`);
+        break;
+      }
+      case 'charged': {
+        const charge = parsed.data;
+        const subId = Number(charge.subId);
+        const existing = getSubscriptionById(subId);
+        const plan = getPlanById(Number(charge.planId));
+        const completed =
+          plan !== undefined &&
+          plan.max_cycles !== 0 &&
+          charge.cyclesCharged >= plan.max_cycles;
+
+        upsertSubscription({
+          id: subId,
+          plan_id: Number(charge.planId),
+          subscriber: charge.subscriber,
+          started_at: existing?.started_at ?? now,
+          next_charge_at: Number(charge.nextChargeAt),
+          cycles_charged: charge.cyclesCharged,
+          total_paid: charge.totalPaid.toString(),
+          status: completed ? 'completed' : existing?.status ?? 'active',
+          created_at: existing?.created_at ?? now,
+        });
+        recordCharge(
+          subId,
+          Number(charge.planId),
+          charge.amount.toString(),
+          charge.cyclesCharged,
+          event.ledger,
+          event.ledgerClosedAt,
+          event.txHash,
+        );
+        recordEvent(
+          subId,
+          'charged',
+          event.ledger,
+          parsed.data,
+          event.ledgerClosedAt,
+          event.txHash,
+        );
+        console.log(
+          `[Indexer] Charged #${subId} cycle ${charge.cyclesCharged} (${charge.amount})`,
+        );
+        break;
+      }
+      case 'subscription_updated': {
+        const update = parsed.data;
+        const subId = Number(update.subId);
+        const existing = getSubscriptionById(subId);
+        if (!existing) break;
+        upsertSubscription({
+          ...existing,
+          next_charge_at: Number(update.nextChargeAt),
+          status: update.status,
+        });
+        recordEvent(
+          subId,
+          update.status,
+          event.ledger,
+          parsed.data,
+          event.ledgerClosedAt,
+          event.txHash,
+        );
+        console.log(`[Indexer] Subscription #${subId} → ${update.status}`);
+        break;
+      }
+      case 'plan_status_changed': {
+        const change = parsed.data;
+        setPlanActive(Number(change.planId), change.active);
+        console.log(
+          `[Indexer] Plan #${change.planId} ${change.active ? 'enabled' : 'retired'}`,
+        );
+        break;
       }
     }
-
-    // Decode value
-    let decodedValue: unknown = null;
-    try {
-      if (typeof event.value === 'string') {
-        const scVal = xdr.ScVal.fromXDR(event.value, 'base64');
-        decodedValue = scValToNative(scVal);
-      } else {
-        decodedValue = scValToNative(event.value as xdr.ScVal);
-      }
-    } catch {
-      decodedValue = event.value;
-    }
-
-    // Find topic identifier
-    const eventName = decodedTopics.map(String).join(':');
-
-    if (eventName.includes('StreamCreated') || String(decodedValue).includes('deposit_amount')) {
-      this.handleStreamCreated(decodedValue, event.ledger, event.txHash, event.ledgerClosedAt);
-    } else if (eventName.includes('TokensWithdrawn') || String(decodedValue).includes('amount')) {
-      this.handleTokensWithdrawn(decodedValue, event.ledger, event.txHash, event.ledgerClosedAt);
-    } else if (eventName.includes('StreamCanceled') || String(decodedValue).includes('sender_refund')) {
-      this.handleStreamCanceled(decodedValue, event.ledger, event.txHash, event.ledgerClosedAt);
-    }
-  }
-
-  private handleStreamCreated(
-    value: unknown,
-    ledger: number,
-    txHash?: string,
-    ledgerClosedAt?: string,
-  ): void {
-    if (!value || typeof value !== 'object') return;
-    const data = value as Record<string, unknown>;
-
-    const streamId = Number(data.stream_id ?? data.streamId ?? 0);
-    const sender = String(data.sender || '');
-    const recipient = String(data.recipient || '');
-    const token = String(data.token || '');
-    const depositAmount = String(data.deposit_amount ?? data.depositAmount ?? '0');
-    const startTime = Number(data.start_time ?? data.startTime ?? 0);
-    const stopTime = Number(data.stop_time ?? data.stopTime ?? 0);
-
-    const duration = stopTime > startTime ? stopTime - startTime : 1;
-    const ratePerSecond = (BigInt(depositAmount) / BigInt(duration)).toString();
-
-    upsertStream({
-      id: streamId,
-      sender,
-      recipient,
-      token,
-      deposit_amount: depositAmount,
-      start_time: startTime,
-      stop_time: stopTime,
-      rate_per_second: ratePerSecond,
-      remaining_balance: depositAmount,
-      recipient_withdrawn: '0',
-      is_canceled: 0,
-      cancelable: 1,
-      created_at: ledgerClosedAt ? Math.floor(new Date(ledgerClosedAt).getTime() / 1000) : Math.floor(Date.now() / 1000),
-    });
-
-    insertEvent(
-      streamId,
-      'StreamCreated',
-      ledger,
-      data,
-      txHash,
-      ledgerClosedAt,
-    );
-
-    console.log(`[Indexer] StreamCreated indexed: ID #${streamId} (${depositAmount} tokens)`);
-  }
-
-  private handleTokensWithdrawn(
-    value: unknown,
-    ledger: number,
-    txHash?: string,
-    ledgerClosedAt?: string,
-  ): void {
-    if (!value || typeof value !== 'object') return;
-    const data = value as Record<string, unknown>;
-
-    const streamId = Number(data.stream_id ?? data.streamId ?? 0);
-    const amount = String(data.amount ?? '0');
-    const remainingBalance = String(data.remaining_balance ?? data.remainingBalance ?? '0');
-
-    recordWithdrawal(streamId, amount, remainingBalance);
-
-    insertEvent(
-      streamId,
-      'TokensWithdrawn',
-      ledger,
-      data,
-      txHash,
-      ledgerClosedAt,
-    );
-
-    console.log(`[Indexer] TokensWithdrawn indexed: Stream #${streamId} withdrawn ${amount}`);
-  }
-
-  private handleStreamCanceled(
-    value: unknown,
-    ledger: number,
-    txHash?: string,
-    ledgerClosedAt?: string,
-  ): void {
-    if (!value || typeof value !== 'object') return;
-    const data = value as Record<string, unknown>;
-
-    const streamId = Number(data.stream_id ?? data.streamId ?? 0);
-
-    recordCancellation(streamId);
-
-    insertEvent(
-      streamId,
-      'StreamCanceled',
-      ledger,
-      data,
-      txHash,
-      ledgerClosedAt,
-    );
-
-    console.log(`[Indexer] StreamCanceled indexed: Stream #${streamId}`);
   }
 }
